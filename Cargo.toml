@@ -1,0 +1,10 @@
+[package]
+name = "luau-rs"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+luau_vector4=[]
+
+[build-dependencies]
+cmake = "0.1.51"
