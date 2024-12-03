@@ -139,19 +139,19 @@ impl Luau {
     }
 
     /// Will invoke Luau error code, if not called from a protected environment will cause a fatal error and panic
-    pub fn error(&self, error: LuauError) -> ! {
-        match error {
-            LuauError::AllocationError => unsafe {
-                // how did we get here
-                fatal_error_handler(self.state, LuaStatus::LUA_ERRMEM);
-                std::process::abort();
-            },
-            LuauError::RuntimeError(contents) => unsafe {
-                lua_pushlstring(self.state, contents.as_ptr() as _, contents.len());
-                lua_error(self.state);
-            },
-        }
-    }
+    // pub fn error(&self, error: LuauError) -> ! {
+    //     match error {
+    //         LuauError::AllocationError => unsafe {
+    //             // how did we get here
+    //             fatal_error_handler(self.state, LuaStatus::LUA_ERRMEM);
+    //             std::process::abort();
+    //         },
+    //         LuauError::RuntimeError(contents) => unsafe {
+    //             lua_pushlstring(self.state, contents.as_ptr() as _, contents.len());
+    //             lua_error(self.state);
+    //         },
+    //     }
+    // }
 
     /// Returns true if the value at `idx` is a bool, false otherwise
     pub fn is_boolean(&self, idx: c_int) -> bool {
