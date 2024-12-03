@@ -1,8 +1,9 @@
+use std::ffi::c_void;
 use std::os::raw::{c_char, c_int};
 use std::ptr;
 
 #[repr(C)]
-pub struct LuaCompileOptions {
+pub struct LuauCompileOptions {
     /// Determines the degree of optimizations the compiler will do
     ///
     /// 0. No optimizations
@@ -44,7 +45,7 @@ pub struct LuaCompileOptions {
     pub userdata_types: *const *const c_char,
 }
 
-impl Default for LuaCompileOptions {
+impl Default for LuauCompileOptions {
     fn default() -> Self {
         Self {
             optimization_level: 1,
@@ -71,7 +72,12 @@ extern "C-unwind" {
     pub fn luau_compile(
         source: *const c_char,
         size: usize,
-        options: *mut LuaCompileOptions,
+        options: *mut LuauCompileOptions,
         outsize: *mut usize,
     ) -> *mut c_char;
+}
+
+extern "C" {
+    #[link_name = "free"]
+    pub fn cstdlib_free(ptr: *mut c_void);
 }
