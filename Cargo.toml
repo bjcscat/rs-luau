@@ -1,9 +1,12 @@
 [package]
-name = "luau-rs"
+name = "rs-luau"
 version = "0.0.1"
 edition = "2021"
 
 [features]
+default=["compiler", "codegen"]
+compiler = []
+codegen = []
 luau_vector4=[]
 
 [build-dependencies]

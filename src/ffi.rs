@@ -57,7 +57,9 @@ pub mod luauconf {
 pub mod luau;
 pub mod luaulib;
 pub mod lauxlib;
+#[cfg(feature="compiler")]
 pub mod luaucode;
+#[cfg(feature="codegen")]
 pub mod luaucodegen;
 
 #[allow(dead_code, unused)]
@@ -65,6 +67,8 @@ pub mod prelude {
     pub use super::luau::*;
     pub use super::lauxlib::*;
     pub use super::luaulib::*;
+    #[cfg(feature="compiler")]
     pub use super::luaucode::*;
+    #[cfg(feature="codegen")]
     pub use super::luaucodegen::*;
 }

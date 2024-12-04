@@ -1,4 +1,6 @@
+#[cfg(feature = "compiler")]
 mod compile;
+
 mod ffi;
 mod memory;
 mod userdata;
@@ -6,6 +8,7 @@ mod userdata;
 use core::str;
 use std::{
     any::Any,
+    cell::Cell,
     ffi::{c_char, c_int},
     os::raw::c_void,
     ptr::{null, null_mut},
@@ -17,7 +20,10 @@ use ffi::{
     prelude::*,
 };
 use memory::{luau_alloc_cb, DefaultLuauAllocator};
-use userdata::{drop_userdata, dtor_rs_luau_userdata_callback, Userdata, UD_TAG};
+use userdata::{
+    drop_userdata, dtor_rs_luau_userdata_callback, Userdata, UserdataBorrowError, UserdataRef,
+    UserdataRefMut, UD_TAG,
+};
 
 pub use memory::LuauAllocator;
 
@@ -33,6 +39,12 @@ macro_rules! luau_stack_precondition {
 struct AssociatedData {
     allocator: Box<dyn LuauAllocator>,
     app_data: Option<Box<dyn Any>>,
+}
+
+#[cfg(feature="codegen")]
+/// Returns true if codegen is supported for the given platform
+pub fn codegen_supported() -> bool {
+    unsafe { luau_codegen_supported() == 1 }
 }
 
 /// Main struct implementing luau functionality
@@ -67,6 +79,14 @@ impl Luau {
         Self { owned: true, state }
     }
 
+    #[cfg(feature="codegen")]
+    /// Enables codegen for the given state
+    pub fn enable_codegen(&self) {
+        unsafe {
+            luau_codegen_create(self.state);
+        }
+    }
+
     /// Creates a Luau struct from a raw state pointer
     ///
     /// # Safety
@@ -78,12 +98,14 @@ impl Luau {
         }
     }
 
+    const ASSOCIATED_DATA_ERROR: &str = "Expected associated data structure";
+
     pub(crate) fn get_associated(&self) -> &AssociatedData {
         unsafe {
             let mut ptr: *const AssociatedData = null();
             lua_getallocf(self.state, &raw mut ptr as _);
 
-            ptr.as_ref().unwrap()
+            ptr.as_ref().expect(Self::ASSOCIATED_DATA_ERROR)
         }
     }
 
@@ -92,18 +114,15 @@ impl Luau {
             let mut ptr: *mut AssociatedData = null_mut();
             lua_getallocf(self.state, &raw mut ptr as _);
 
-            ptr.as_mut().unwrap()
+            ptr.as_mut().expect(Self::ASSOCIATED_DATA_ERROR)
         }
     }
 
     pub fn get_app_data<T: Any>(&self) -> Option<&T> {
-        self.get_associated()
-            .app_data
-            .as_ref()
-            .and_then(|v| {
-                dbg!(v.is::<bool>(), std::any::type_name::<T>());
-                v.downcast_ref()
-            })
+        self.get_associated().app_data.as_ref().and_then(|v| {
+            dbg!(v.is::<bool>(), std::any::type_name::<T>());
+            v.downcast_ref()
+        })
     }
 
     pub fn get_app_data_mut<T: Any>(&mut self) -> Option<&mut T> {
@@ -163,6 +182,10 @@ impl Luau {
     }
 
     pub fn check_index(&self, idx: c_int) -> bool {
+        if idx == LUA_REGISTRYINDEX {
+            return true;
+        }
+
         let top = self.top();
 
         if lua_ispseudo(idx) && (LUA_GLOBALSINDEX < idx) {
@@ -188,6 +211,16 @@ impl Luau {
 
     pub fn check_stack(&self, sz: c_int) -> bool {
         unsafe { lua_checkstack(self.state, sz) == 1 }
+    }
+
+    /// Returns the status of the Luau state
+    pub fn status(&self) -> LuaStatus {
+        unsafe { lua_status(self.state) }
+    }
+
+    #[inline]
+    pub fn registry(&self) -> c_int {
+        LUA_REGISTRYINDEX
     }
 
     /// Will invoke Luau error code, if not called from a protected environment will cause a fatal error and panic
@@ -388,26 +421,63 @@ impl Luau {
 
             userdata_ptr.write(Userdata {
                 id: object.type_id(),
+                count_cell: Cell::new(0),
                 dtor,
                 inner: object,
             });
         }
     }
 
-    /// Gets a userdata value of type T, returning None if the value isn't a userdata or the userdata is not of type T
-    pub fn get_userdata<T: Any>(&self, idx: c_int) -> Option<&mut T> {
+    fn get_userdata_ptr<T: Any>(&self, idx: c_int) -> Option<*mut Userdata<T>> {
         luau_stack_precondition!(self.check_index(idx));
 
-        // SAFETY: We validate that the userdata at the checked idx is of the proper type T and return a 'lua reference if so
+        // SAFETY: We validate that the userdata at the checked idx is of the proper type T or null
         unsafe {
             let userdata_ptr: *mut Userdata<()> =
                 lua_touserdatatagged(self.state, idx, UD_TAG) as _;
 
             if !userdata_ptr.is_null() && (*userdata_ptr).is::<T>() {
-                Some(&mut (*(userdata_ptr as *mut Userdata<T>)).inner)
+                Some(userdata_ptr as _)
             } else {
                 None
             }
+        }
+    }
+
+    /// Returns a result with a ref to a userdata value of type T or an error if the userdata is already mutably borrowed.
+    ///
+    /// Returns `None` if the value isn't a userdata or the userdata is not of type T.
+    pub fn try_borrow_userdata<T: Any>(
+        &self,
+        idx: c_int,
+    ) -> Option<Result<UserdataRef<T>, UserdataBorrowError>> {
+        // SAFETY: We validate that the userdata at the checked idx is a userdata and a valid T through `get_userdata_ptr`
+        unsafe {
+            let userdata_ptr = self.get_userdata_ptr(idx)?;
+
+            Some(UserdataRef::try_from_ptr(userdata_ptr))
+        }
+    }
+
+    /// Gets a reference to a userdata value of type T, returning None if the value isn't a userdata or the userdata is not of type T.
+    ///
+    /// Will panic if the userdata is already mutably borrowed
+    pub fn borrow_userdata<T: Any>(&self, idx: c_int) -> Option<UserdataRef<T>> {
+        self.try_borrow_userdata(idx).map(Result::unwrap)
+    }
+
+    /// Tries to get a mutable reference to a userdata value of type T. Returns a result with the ref or an error.
+    ///
+    /// Returns `None` if the value is not of the correct type or if the value is already at idx.
+    pub fn try_borrow_userdata_mut<T: Any>(
+        &self,
+        idx: c_int,
+    ) -> Option<Result<UserdataRefMut<T>, UserdataBorrowError>> {
+        // SAFETY: We validate that the userdata at the checked idx is a userdata and a valid T through `get_userdata_ptr`
+        unsafe {
+            let userdata_ptr = self.get_userdata_ptr(idx)?;
+
+            Some(UserdataRefMut::try_from_ptr(userdata_ptr))
         }
     }
 
@@ -421,11 +491,7 @@ impl Luau {
         luau_stack_precondition!(self.check_index(idx));
 
         // SAFETY: we don't do any checking other than validating idx
-        unsafe {
-            (lua_touserdatatagged(self.state, idx, UD_TAG) as *mut Userdata<T>)
-                .as_mut()
-                .map(|v| &mut v.inner)
-        }
+        unsafe { Some(&mut (*self.get_userdata_ptr(idx)?).inner) }
     }
 
     /// Returns true if the value at `idx` is a light userdata, it returns false otherwise.
@@ -583,7 +649,7 @@ impl Luau {
         }
     }
 
-    /// Calls a Luau function returning the status of the Luau state when it returns
+    /// Calls the Luau function at the top of the stack returning the status of the Luau state when it returns
     pub fn call(&self, nargs: c_int, nresults: c_int) -> LuaStatus {
         assert!(
             self.is_function(-1),
@@ -598,6 +664,45 @@ impl Luau {
         luau_stack_precondition!(self.check_stack(nresults));
 
         unsafe { lua_pcall(self.state, nargs, nresults, 0) }
+    }
+
+    /// Loads bytecode into the VM and pushes a function to the stack
+    pub fn load(&self, chunk_name: Option<&str>, bytecode: &[u8], env: c_int) -> Result<(), &str> {
+        luau_stack_precondition!(self.check_index(env));
+        luau_stack_precondition!(self.check_stack(2));
+
+        let success = unsafe {
+            luau_load(
+                self.state,
+                chunk_name.or(Some("\0")).map(str::as_ptr).unwrap() as _,
+                bytecode.as_ptr() as _,
+                bytecode.len(),
+                env,
+            )
+        };
+
+        if success == 0 {
+            Ok(())
+        } else {
+            // we have an error and know its ascii
+            Err(self.to_str(-1).unwrap().unwrap())
+        }
+    }
+
+    #[cfg(feature="codegen")]
+    /// Compiles a function with native code generation.
+    ///
+    /// This will fail silently if the codegen is not supported and initialized
+    pub fn codegen(&self, idx: c_int) {
+        luau_stack_precondition!(self.check_index(idx));
+        assert!(
+            self.is_function(idx),
+            "The value at idx must be a function to be compiled with codegen"
+        );
+
+        unsafe {
+            luau_codegen_compile(self.state, idx);
+        }
     }
 }
 
@@ -654,7 +759,10 @@ mod binding_tests {
         rc::Rc,
     };
 
-    use crate::{Luau, LuauAllocator, _LuaState, lua_error, lua_tonumber, lua_upvalueindex};
+    use crate::{
+        Luau, LuauAllocator, _LuaState, lua_error, lua_tonumber, lua_upvalueindex,
+        userdata::{UserdataBorrowError, UserdataRef},
+    };
 
     #[test]
     #[should_panic]
@@ -681,6 +789,40 @@ mod binding_tests {
         luau.is_number(-1);
         luau.is_number(1);
         luau.is_number(0); // not the value but is the nil value
+    }
+
+    #[cfg(all(feature = "codegen", feature = "compiler"))]
+    #[test]
+    fn codegen() {
+        use crate::compile::Compiler;
+
+        let compiler = Compiler::new();
+        let luau = Luau::default();
+
+        let result = compiler.compile("(function() return 123 end)()");
+
+        assert!(result.is_ok(), "Compiler result is expected to be OK");
+
+        let load_result = luau.load(None, result.bytecode().unwrap(), 0);
+
+        assert!(load_result.is_ok(), "Load result should be Ok");
+
+        luau.codegen(-1);
+
+        luau.call(0, 0);
+    }
+
+    #[test]
+    fn load_error() {
+        let luau = Luau::default();
+
+        let load_result = luau.load(None, b"\0Error!", 0);
+
+        // might change depending on luau updates
+        assert!(
+            load_result.is_err_and(|v| v == r#"[string ""]Error!"#),
+            "Expected load result to be an error and be the correct error message."
+        );
     }
 
     #[test]
@@ -815,6 +957,62 @@ mod binding_tests {
     // }
 
     #[test]
+    fn userdata_borrow() {
+        let luau = Luau::default();
+
+        luau.push_userdata(());
+
+        {
+            let borrow = luau.try_borrow_userdata_mut::<()>(-1);
+
+            assert!(
+                borrow.as_ref().is_some_and(Result::is_ok),
+                "Expected mutable borrow for userdata to be valid"
+            );
+
+            assert!(
+                matches!(
+                    luau.try_borrow_userdata::<()>(-1),
+                    Some(Err(UserdataBorrowError::AlreadyMutable))
+                ),
+                "Expected immutable borrow for userdata to be invalid"
+            );
+
+            assert!(
+                matches!(
+                    luau.try_borrow_userdata_mut::<()>(-1),
+                    Some(Err(UserdataBorrowError::AlreadyMutable))
+                ),
+                "Expected mutable borrow for userdata to be invalid"
+            );
+
+            drop(borrow);
+
+            assert!(
+                matches!(luau.try_borrow_userdata_mut::<()>(-1), Some(Ok(_))),
+                "Expected mutable borrow for userdata to be valid"
+            );
+        }
+
+        {
+            let borrow = luau.try_borrow_userdata::<()>(-1);
+
+            assert!(
+                matches!(borrow, Some(Ok(_))),
+                "Expected to be a valid borrow"
+            );
+
+            assert!(
+                matches!(
+                    luau.try_borrow_userdata_mut::<()>(-1),
+                    Some(Err(UserdataBorrowError::AlreadyImmutable))
+                ),
+                "Expected borrow to be an AlreadyImmutable error"
+            );
+        }
+    }
+
+    #[test]
     fn userdata_values() {
         let luau = Luau::default();
 
@@ -828,18 +1026,23 @@ mod binding_tests {
         luau.push_userdata(vec);
 
         #[repr(transparent)]
-        struct DropCheck(Rc<()>);
+        struct DropCheck(Rc<bool>);
 
-        let drop_rc = Rc::new(());
+        let drop_rc = Rc::new(true);
         let yes_drop = DropCheck(drop_rc.clone());
 
         luau.push_userdata(yes_drop);
 
-        assert!(luau.get_userdata(-3).copied() == Some(()));
+        assert!(luau.borrow_userdata(-3).is_some_and(
+            #[allow(clippy::unit_cmp)]
+            |v: UserdataRef<()>| *v == ()
+        ));
+
         assert!(luau
-            .get_userdata::<Vec<i32>>(-2)
+            .borrow_userdata::<Vec<i32>>(-2)
             .is_some_and(|v| v.is_sorted())); // is larger data preserved correctly
-        assert!(luau.get_userdata::<DropCheck>(-1).is_some());
+
+        assert!(luau.borrow_userdata::<DropCheck>(-1).is_some());
 
         drop(luau);
 

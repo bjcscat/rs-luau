@@ -101,10 +101,15 @@ fn main() {
         );
     }
 
-    println!("cargo:rustc-link-lib=static=Luau.Ast");
-    println!("cargo:rustc-link-lib=static=Luau.Compiler");
-    // println!("cargo:rustc-link-lib=static=Luau.Analysis");
     println!("cargo:rustc-link-lib=static=Luau.VM");
+
+    #[cfg(feature = "compiler")]
+    println!("cargo:rustc-link-lib=static=Luau.Compiler");
+    #[cfg(feature = "compiler")]
+    println!("cargo:rustc-link-lib=static=Luau.Ast");
+    // println!("cargo:rustc-link-lib=static=Luau.Analysis");
+
+    #[cfg(feature = "codegen")]
     println!("cargo:rustc-link-lib=static=Luau.CodeGen");
 
     // link to C++ stdlib, unless we're on windows, which is special
