@@ -1,10 +1,16 @@
+mod compile;
 mod ffi;
 mod memory;
-mod compile;
 mod userdata;
 
 use core::str;
-use std::{any::Any, ffi::{c_char, c_int}, os::raw::c_void, ptr::null, slice};
+use std::{
+    any::Any,
+    ffi::{c_char, c_int},
+    os::raw::c_void,
+    ptr::{null, null_mut},
+    slice,
+};
 
 use ffi::{
     luauconf::{LUAI_MAXCSTACK, LUA_MEMORY_CATEGORIES},
@@ -26,19 +32,19 @@ macro_rules! luau_stack_precondition {
 
 struct AssociatedData {
     allocator: Box<dyn LuauAllocator>,
-    userdata: Option<Box<dyn Any>>,
+    app_data: Option<Box<dyn Any>>,
 }
 
 /// Main struct implementing luau functionality
 pub struct Luau {
     owned: bool,
-    state: *mut _LuaState
+    state: *mut _LuaState,
 }
 
 impl Luau {
     unsafe fn new_state(allocator: impl LuauAllocator + 'static) -> *mut _LuaState {
         let associated_data = Box::new(AssociatedData {
-            userdata: None,
+            app_data: None,
             allocator: Box::new(allocator),
         });
 
@@ -62,18 +68,62 @@ impl Luau {
     }
 
     /// Creates a Luau struct from a raw state pointer
-    /// 
+    ///
     /// # Safety
     /// The pointer must be a valid Luau state
     pub unsafe fn from_ptr(state: *mut _LuaState) -> Self {
         Self {
             owned: false,
-            state
+            state,
         }
     }
 
-    pub fn set_data<T: Any>(&self, _: T) {
-        // let boxed_data: Box<dyn Any> = Box::new(ud);
+    pub(crate) fn get_associated(&self) -> &AssociatedData {
+        unsafe {
+            let mut ptr: *const AssociatedData = null();
+            lua_getallocf(self.state, &raw mut ptr as _);
+
+            ptr.as_ref().unwrap()
+        }
+    }
+
+    pub(crate) fn get_associated_mut(&mut self) -> &mut AssociatedData {
+        unsafe {
+            let mut ptr: *mut AssociatedData = null_mut();
+            lua_getallocf(self.state, &raw mut ptr as _);
+
+            ptr.as_mut().unwrap()
+        }
+    }
+
+    pub fn get_app_data<T: Any>(&self) -> Option<&T> {
+        self.get_associated()
+            .app_data
+            .as_ref()
+            .and_then(|v| {
+                dbg!(v.is::<bool>(), std::any::type_name::<T>());
+                v.downcast_ref()
+            })
+    }
+
+    pub fn get_app_data_mut<T: Any>(&mut self) -> Option<&mut T> {
+        self.get_associated_mut()
+            .app_data
+            .as_mut()
+            .and_then(|v| v.downcast_mut())
+    }
+
+    /// Sets the associated app data for the Luau state returning the previous value
+    pub fn set_app_data<T: Any>(&mut self, ud: Option<T>) -> Option<Box<dyn Any>> {
+        let associated = self.get_associated_mut();
+
+        if let Some(v) = ud {
+            let boxed_data = Box::new(v);
+
+            associated.app_data.replace(boxed_data)
+        } else {
+            associated.app_data.take()
+        }
     }
 
     #[inline]
@@ -92,13 +142,15 @@ impl Luau {
         luau_stack_precondition!(self.check_index(-n));
 
         // SAFETY: -n is validated by the precondition
-        unsafe {lua_settop(self.state, -(n + 1))}
+        unsafe { lua_settop(self.state, -(n + 1)) }
     }
 
+    /// Returns an upvalue index for the specified upvalue index
     pub fn upvalue(&self, uv_idx: c_int) -> c_int {
         lua_upvalueindex(uv_idx)
     }
 
+    /// Sets the memory category for all allocations taking place after its set
     pub fn set_memory_category(&self, cat: c_int) {
         assert!(
             cat < LUA_MEMORY_CATEGORIES,
@@ -126,7 +178,7 @@ impl Luau {
 
         if idx < LUA_GLOBALSINDEX {
             // upvalue idx
-            return true
+            return true;
         }
 
         idx >= 0 && // greater or equal to zero and
@@ -158,9 +210,7 @@ impl Luau {
         luau_stack_precondition!(self.check_index(idx));
 
         // SAFETY: idx is validated by the precondition
-        unsafe {
-            lua_isboolean(self.state, idx)
-        }
+        unsafe { lua_isboolean(self.state, idx) }
     }
 
     /// Returns true if the value at `idx` is nil
@@ -168,15 +218,13 @@ impl Luau {
         luau_stack_precondition!(self.check_index(idx));
 
         // SAFETY: stack size is validated by precondition
-        unsafe {
-            lua_isnil(self.state, idx)
-        }
+        unsafe { lua_isnil(self.state, idx) }
     }
 
     /// Pushes a nil value to the stack
     pub fn push_nil(&self) {
         luau_stack_precondition!(self.check_stack(1));
-        
+
         // SAFETY: stack size is validated by precondition
         unsafe {
             lua_pushnil(self.state);
@@ -188,9 +236,7 @@ impl Luau {
         luau_stack_precondition!(self.check_index(idx));
 
         // SAFETY: idx is validated by the precondition
-        unsafe {
-            lua_toboolean(self.state, idx) == 1
-        }
+        unsafe { lua_toboolean(self.state, idx) == 1 }
     }
 
     /// Pushes a boolean value to the Luau stack
@@ -368,13 +414,10 @@ impl Luau {
     /// Retrives a userdata of type T without performing a type check to determine if the inner type is really T
     ///
     /// Will return None if the value at idx is not a userdata
-    /// 
+    ///
     /// # Safety
     /// You need to know beforehand that the userdata here is of the correct type or has such a layout that the type requested is valid
-    pub unsafe fn get_userdata_unchecked<T: 'static>(
-        &self,
-        idx: c_int,
-    ) -> Option<&mut T> {
+    pub unsafe fn get_userdata_unchecked<T: 'static>(&self, idx: c_int) -> Option<&mut T> {
         luau_stack_precondition!(self.check_index(idx));
 
         // SAFETY: we don't do any checking other than validating idx
@@ -390,9 +433,7 @@ impl Luau {
         luau_stack_precondition!(self.check_index(idx));
 
         // SAFETY: idx is validated by the precondition
-        unsafe {
-            lua_islightuserdata(self.state, idx)
-        }
+        unsafe { lua_islightuserdata(self.state, idx) }
     }
 
     /// Returns an option of a raw pointer. Will be Some if the value at `idx` is a lightuserdata, None otherwise.
@@ -433,10 +474,7 @@ impl Luau {
     }
 
     /// Pushes a slice to the Luau stack as a buffer
-    pub fn push_buffer_from_slice(
-        &mut self,
-        slice: impl AsRef<[u8]>,
-    ) -> &mut [u8] {
+    pub fn push_buffer_from_slice(&mut self, slice: impl AsRef<[u8]>) -> &mut [u8] {
         // precondition is validated by push_buffer
 
         let slice = slice.as_ref();
@@ -483,7 +521,7 @@ impl Luau {
     /// Pushes a raw rust function to the stack which receives a pointer to the luau state and returns the number of result values
     ///
     /// Can receive a number of upvalues specified by the `num_upvalues` argument which are accessed through ffi's upvalueindex
-    /// 
+    ///
     /// # Safety
     /// You will need to uphold all safety invariants with respect to the Luau VM in the user supplied `func`
     pub unsafe fn push_raw_function(
@@ -498,28 +536,38 @@ impl Luau {
             self.top() >= num_upvals,
             "The number of upvalues for a raw function must not exceed the stack length"
         );
-        
+
         // SAFETY: upvalue count and stack size are validated as a precondition and assert
         unsafe {
-            lua_pushcclosure(self.state, func, if let Some(name) = debug_name {
-                name.as_ptr() as *const c_char
-            } else {
-                null()
-            }, num_upvals);
+            lua_pushcclosure(
+                self.state,
+                func,
+                if let Some(name) = debug_name {
+                    name.as_ptr() as *const c_char
+                } else {
+                    null()
+                },
+                num_upvals,
+            );
         }
     }
 
     /// Pushes a Rust function into Luau
     ///
     /// This function wraps a Rust function to allow closures to capture values, to avoid this minor overhead you can use `push_function_raw`
-    pub fn push_function<F: Fn(Luau) -> i32>(&self, func: F, debug_name: Option<&str>, num_upvals: c_int) {
+    pub fn push_function<F: Fn(Luau) -> i32>(
+        &self,
+        func: F,
+        debug_name: Option<&str>,
+        num_upvals: c_int,
+    ) {
         assert!(
             self.top() >= num_upvals,
             "The number of upvalues for a raw function must not exceed the stack length"
-        );    
+        );
 
         luau_stack_precondition!(self.check_stack(2));
-        
+
         let func_box = Box::new(func);
 
         unsafe extern "C-unwind" fn invoke_fn<T: Fn(Luau) -> i32>(state: *mut _LuaState) -> c_int {
@@ -557,7 +605,10 @@ impl Luau {
 unsafe extern "C-unwind" fn fatal_runtime_error_handler(state: *mut _LuaState) -> c_int {
     let luau = unsafe { Luau::from_ptr(state) };
 
-    panic!("Uncaught runtime error - \"{}\"", String::from_utf8_lossy(luau.convert_to_str_slice(-1)));
+    panic!(
+        "Uncaught runtime error - \"{}\"",
+        String::from_utf8_lossy(luau.convert_to_str_slice(-1))
+    );
 }
 
 /// Final resting place for Luau code, we don't return from this.
@@ -597,7 +648,11 @@ impl Drop for Luau {
 #[cfg(test)]
 #[allow(non_snake_case)]
 mod binding_tests {
-    use std::{ffi::{c_int, c_void}, hint::black_box, rc::Rc};
+    use std::{
+        ffi::{c_int, c_void},
+        hint::black_box,
+        rc::Rc,
+    };
 
     use crate::{Luau, LuauAllocator, _LuaState, lua_error, lua_tonumber, lua_upvalueindex};
 
@@ -663,20 +718,33 @@ mod binding_tests {
     }
 
     #[test]
+    fn app_data() {
+        let mut luau = Luau::default();
+
+        luau.set_app_data(Some(true));
+
+        assert_eq!(luau.get_app_data::<bool>().copied(), Some(true))
+    }
+
+    #[test]
     fn function_upvalue_test() {
         let luau = Luau::default();
-        
+
         luau.push_number(1.0);
         luau.push_number(2.0);
         luau.push_number(3.0);
 
-        luau.push_function(|luau| {
-            assert_eq!(luau.to_number(luau.upvalue(1)), Some(1.0));
-            assert_eq!(luau.to_number(luau.upvalue(2)), Some(2.0));
-            assert_eq!(luau.to_number(luau.upvalue(3)), Some(3.0));
+        luau.push_function(
+            |luau| {
+                assert_eq!(luau.to_number(luau.upvalue(1)), Some(1.0));
+                assert_eq!(luau.to_number(luau.upvalue(2)), Some(2.0));
+                assert_eq!(luau.to_number(luau.upvalue(3)), Some(3.0));
 
-            0
-        }, Some("test"), 3);
+                0
+            },
+            Some("test"),
+            3,
+        );
 
         luau.call(0, 0);
     }
@@ -684,7 +752,7 @@ mod binding_tests {
     #[test]
     fn raw_function_upvalue_test() {
         let luau = Luau::default();
-        
+
         luau.push_number(1.0);
         luau.push_number(2.0);
         luau.push_number(3.0);
@@ -697,9 +765,9 @@ mod binding_tests {
             0
         }
 
-unsafe {
-        luau.push_raw_function( test_extern_fn, Some("test"), 3);
-    }
+        unsafe {
+            luau.push_raw_function(test_extern_fn, Some("test"), 3);
+        }
         luau.call(0, 0);
     }
 
@@ -811,7 +879,6 @@ unsafe {
 
     #[test]
     fn numeric_values() {
-
         let luau = Luau::default();
 
         luau.push_number(f64::NAN);
@@ -820,8 +887,14 @@ unsafe {
         luau.push_string("12345");
 
         // nan is not equal to itself, because that makes sense
-        assert_eq!(luau.to_number(-4).map(f64::to_bits), Some(f64::NAN.to_bits()));
-        assert_eq!(luau.to_number(1).map(f64::to_bits), Some(f64::NAN.to_bits()));
+        assert_eq!(
+            luau.to_number(-4).map(f64::to_bits),
+            Some(f64::NAN.to_bits())
+        );
+        assert_eq!(
+            luau.to_number(1).map(f64::to_bits),
+            Some(f64::NAN.to_bits())
+        );
 
         assert_eq!(luau.to_number(-3), Some(f64::INFINITY));
         assert_eq!(luau.to_number(2), Some(f64::INFINITY));
