@@ -1,7 +1,7 @@
 use core::str;
-use std::{cell::UnsafeCell, ffi::c_int, fs, path::Path, ptr::null};
+use std::{cell::UnsafeCell, ffi::c_int};
 
-use crate::{cstdlib_free, ffi::luaucode, luau_compile, LuauCompileOptions};
+use crate::{cstdlib_free, luau_compile, LuauCompileOptions};
 
 pub struct Compiler {
     _vector_lib: Option<Box<[u8]>>,

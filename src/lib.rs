@@ -9,9 +9,9 @@ use core::str;
 use std::{
     any::Any,
     cell::Cell,
-    ffi::{c_int, CString},
+    ffi::{c_int, c_uint, CString},
     os::raw::c_void,
-    ptr::{drop_in_place, null, null_mut},
+    ptr::{null, null_mut},
     slice,
 };
 
@@ -239,20 +239,9 @@ impl Luau {
         }
     }
 
-    /// Returns true if the value at `idx` is a bool, false otherwise
-    pub fn is_boolean(&self, idx: c_int) -> bool {
-        luau_stack_precondition!(self.check_index(idx));
-
-        // SAFETY: idx is validated by the precondition
-        unsafe { lua_isboolean(self.state, idx) }
-    }
-
     /// Returns true if the value at `idx` is nil
     pub fn is_nil(&self, idx: c_int) -> bool {
-        luau_stack_precondition!(self.check_index(idx));
-
-        // SAFETY: stack size is validated by precondition
-        unsafe { lua_isnil(self.state, idx) }
+        self.type_of(idx) == LuauType::LUA_TNIL
     }
 
     /// Pushes a nil value to the stack
@@ -263,6 +252,11 @@ impl Luau {
         unsafe {
             lua_pushnil(self.state);
         }
+    }
+
+    /// Returns true if the value at `idx` is a bool, false otherwise
+    pub fn is_boolean(&self, idx: c_int) -> bool {
+        self.type_of(idx) == LuauType::LUA_TBOOLEAN
     }
 
     /// Returns true if the value at `idx` is not nil or false, otherwise returns false
@@ -285,9 +279,27 @@ impl Luau {
 
     /// Returns true if the value at idx is a number, false otherwise
     pub fn is_number(&self, idx: c_int) -> bool {
-        luau_stack_precondition!(self.check_index(idx));
+        self.type_of(idx) == LuauType::LUA_TNUMBER
+    }
 
-        unsafe { lua_isnumber(self.state, idx) == 1 }
+    /// Pushes an integer onto the Luau stack
+    pub fn push_integer(&self, n: c_int) {
+        luau_stack_precondition!(self.check_stack(1));
+
+        // SAFETY: we have adequate stack space as checked by the precondition
+        unsafe {
+            lua_pushinteger(self.state, n);
+        }
+    }
+
+    /// Pushes an unsigned integer onto the Luau stack
+    pub fn push_unsigned_integer(&self, n: c_uint) {
+        luau_stack_precondition!(self.check_stack(1));
+
+        // SAFETY: we have adequate stack space as checked by the precondition
+        unsafe {
+            lua_pushunsigned(self.state, n);
+        }
     }
 
     /// Push a double into the Luau stack
@@ -320,10 +332,7 @@ impl Luau {
 
     /// Returns true if the value at `idx` is a number, false otherwise
     pub fn is_string(&self, idx: c_int) -> bool {
-        luau_stack_precondition!(self.check_index(idx));
-
-        // SAFETY: idx is validated by the precondition
-        unsafe { lua_isstring(self.state, idx) == 1 }
+        self.type_of(idx) == LuauType::LUA_TSTRING
     }
 
     /// Pushes a string to the top of the Luau stack
@@ -497,10 +506,7 @@ impl Luau {
 
     /// Returns true if the value at `idx` is a light userdata, it returns false otherwise.
     pub fn is_lightuserdata(&self, idx: c_int) -> bool {
-        luau_stack_precondition!(self.check_index(idx));
-
-        // SAFETY: idx is validated by the precondition
-        unsafe { lua_islightuserdata(self.state, idx) }
+        self.type_of(idx) == LuauType::LUA_TLIGHTUSERDATA
     }
 
     /// Returns an option of a raw pointer. Will be Some if the value at `idx` is a lightuserdata, None otherwise.
@@ -521,10 +527,7 @@ impl Luau {
 
     /// Returns true if the Luau value at `idx` is a buffer, false otherwise
     pub fn is_buffer(&self, idx: c_int) -> bool {
-        luau_stack_precondition!(self.check_index(idx));
-
-        // SAFETY: idx is checked by the precondition
-        unsafe { lua_isbuffer(self.state, idx) }
+        self.type_of(idx) == LuauType::LUA_TBUFFER
     }
 
     /// Creates a luau buffer of a provided size and pushes it on the stack
@@ -601,9 +604,7 @@ impl Luau {
 
     /// Returns true if the value at `idx` is a table, false otherwise
     pub fn is_table(&self, idx: c_int) -> bool {
-        luau_stack_precondition!(self.check_index(idx));
-
-        unsafe { lua_istable(self.state, idx) }
+        self.type_of(idx) == LuauType::LUA_TTABLE
     }
 
     /// Sets t\[k\] = v where k is the field string, t is the table at idx and k is the value on the top of the stack
@@ -708,12 +709,13 @@ impl Luau {
         }
     }
 
+    pub fn is_vector(&self, idx: c_int) -> bool {
+        self.type_of(idx) == LuauType::LUA_TVECTOR
+    }
+
     /// Returns true if the value at `idx` is a function, false otherwise
     pub fn is_function(&self, idx: c_int) -> bool {
-        luau_stack_precondition!(self.check_index(idx));
-
-        // SAFETY: idx is validated by the precondition
-        unsafe { lua_isfunction(self.state, idx) }
+        self.type_of(idx) == LuauType::LUA_TFUNCTION
     }
 
     /// Pushes a raw rust function to the stack which receives a pointer to the luau state and returns the number of result values
@@ -883,10 +885,12 @@ impl Drop for Luau {
         unsafe {
             let mut associated: *mut AssociatedData = null_mut();
             lua_getallocf(self.state, &raw mut associated as _);
-            
+
             let associated_owned = Box::from_raw(associated);
 
             lua_close(self.state);
+
+            _ = associated_owned
         }
     }
 }
