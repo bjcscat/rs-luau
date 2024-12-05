@@ -11,7 +11,7 @@ use std::{
     cell::Cell,
     ffi::{c_int, CString},
     os::raw::c_void,
-    ptr::{null, null_mut},
+    ptr::{drop_in_place, null, null_mut},
     slice,
 };
 
@@ -881,6 +881,11 @@ impl Drop for Luau {
         }
 
         unsafe {
+            let mut associated: *mut AssociatedData = null_mut();
+            lua_getallocf(self.state, &raw mut associated as _);
+            
+            let associated_owned = Box::from_raw(associated);
+
             lua_close(self.state);
         }
     }
