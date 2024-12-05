@@ -163,11 +163,9 @@ extern "C-unwind" {
     pub fn lua_pushvalue(state: *mut _LuaState, idx: c_int);
 
     /// Removes the element at the given valid index, shifting down the elements above this index to fill the gap.
-    /// This function cannot be called with a pseudo-index, because a pseudo-index is not an actual stack position.
     pub fn lua_remove(state: *mut _LuaState, idx: c_int);
 
     /// Moves the top element into the given valid index, shifting up the elements above this index to open space.
-    /// This function cannot be called with a pseudo-index, because a pseudo-index is not an actual stack position.
     pub fn lua_insert(state: *mut _LuaState, idx: c_int);
 
     /// Moves the top element into the given valid index without shifting any element (therefore replacing the value at that given index), and then pops the top element.
@@ -441,17 +439,17 @@ extern "C-unwind" {
 }
 
 extern "C-unwind" {
-    /// Does the equivalent to t[k] = v, where t is the value at the given valid index, v is the value at the top of the stack, and k is the value just below the top.
+    /// Does the equivalent to t\[k\] = v, where t is the value at the given valid index, v is the value at the top of the stack, and k is the value just below the top.
     ///
     /// This function pops both the key and the value from the stack. As in Luau, this function may trigger a metamethod for the "newindex" event.
     pub fn lua_settable(state: *mut _LuaState, idx: c_int);
 
-    /// Does the equivalent to t[k] = v, where t is the value at the given valid index and v is the value at the top of the stack.
+    /// Does the equivalent to t\[k\] = v, where t is the value at the given valid index and v is the value at the top of the stack.
     ///
     /// This function pops the value from the stack. As in Luau, this function may trigger a metamethod for the "newindex" event
     pub fn lua_setfield(state: *mut _LuaState, idx: c_int, k: *const c_char);
 
-    /// Does the equivalent to t[k] = v, where t is the value at the given valid index and v is the value at the top of the stack.
+    /// Does the equivalent to t\[k\] = v, where t is the value at the given valid index and v is the value at the top of the stack.
     ///
     /// This function pops the value from the stack. This function will not trigger metamethods
     pub fn lua_rawsetfield(state: *mut _LuaState, idx: c_int, k: *const c_char);
