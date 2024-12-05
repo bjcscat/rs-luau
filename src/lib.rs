@@ -9,7 +9,7 @@ use core::str;
 use std::{
     any::Any,
     cell::Cell,
-    ffi::{c_char, c_int},
+    ffi::{c_int, CString},
     os::raw::c_void,
     ptr::{null, null_mut},
     slice,
@@ -31,7 +31,7 @@ macro_rules! luau_stack_precondition {
     ($cond:expr) => {
         assert!(
             $cond,
-            "Stack indicies should not exceed the top of the stack or extend below nor be a pseudo index other than an upvalue"
+            "Stack indicies should not exceed the top of the stack or extend below."
         )
     };
 }
@@ -41,7 +41,7 @@ struct AssociatedData {
     app_data: Option<Box<dyn Any>>,
 }
 
-#[cfg(feature="codegen")]
+#[cfg(feature = "codegen")]
 /// Returns true if codegen is supported for the given platform
 pub fn codegen_supported() -> bool {
     unsafe { luau_codegen_supported() == 1 }
@@ -79,7 +79,7 @@ impl Luau {
         Self { owned: true, state }
     }
 
-    #[cfg(feature="codegen")]
+    #[cfg(feature = "codegen")]
     /// Enables codegen for the given state
     pub fn enable_codegen(&self) {
         unsafe {
@@ -119,10 +119,10 @@ impl Luau {
     }
 
     pub fn get_app_data<T: Any>(&self) -> Option<&T> {
-        self.get_associated().app_data.as_ref().and_then(|v| {
-            dbg!(v.is::<bool>(), std::any::type_name::<T>());
-            v.downcast_ref()
-        })
+        self.get_associated()
+            .app_data
+            .as_ref()
+            .and_then(|v| v.downcast_ref())
     }
 
     pub fn get_app_data_mut<T: Any>(&mut self) -> Option<&mut T> {
@@ -155,6 +155,13 @@ impl Luau {
         unsafe { lua_gettop(self.state) }
     }
 
+    /// Returns the type of a luau value at `idx`
+    pub fn type_of(&self, idx: c_int) -> LuauType {
+        luau_stack_precondition!(self.check_index(idx));
+
+        unsafe { lua_type(self.state, idx) }
+    }
+
     /// Pops `n` values from the stack
     pub fn pop(&self, n: c_int) {
         // assert that the set position is not greater than the top
@@ -182,15 +189,11 @@ impl Luau {
     }
 
     pub fn check_index(&self, idx: c_int) -> bool {
-        if idx == LUA_REGISTRYINDEX {
+        if idx <= LUA_REGISTRYINDEX {
             return true;
         }
 
         let top = self.top();
-
-        if lua_ispseudo(idx) && (LUA_GLOBALSINDEX < idx) {
-            return false; // do not permit pseudo indices except upvalues
-        }
 
         let idx = if idx < 0 {
             // "subtract" the top (idx is negative)
@@ -223,20 +226,18 @@ impl Luau {
         LUA_REGISTRYINDEX
     }
 
-    /// Will invoke Luau error code, if not called from a protected environment will cause a fatal error and panic
-    // pub fn error(&self, error: LuauError) -> ! {
-    //     match error {
-    //         LuauError::AllocationError => unsafe {
-    //             // how did we get here
-    //             fatal_error_handler(self.state, LuaStatus::LUA_ERRMEM);
-    //             std::process::abort();
-    //         },
-    //         LuauError::RuntimeError(contents) => unsafe {
-    //             lua_pushlstring(self.state, contents.as_ptr() as _, contents.len());
-    //             lua_error(self.state);
-    //         },
-    //     }
-    // }
+    #[inline]
+    pub fn globals(&self) -> c_int {
+        LUA_GLOBALSINDEX
+    }
+
+    fn absolutize(&self, idx: c_int) -> c_int {
+        if idx < 0 {
+            self.top() + 1 + idx
+        } else {
+            idx
+        }
+    }
 
     /// Returns true if the value at `idx` is a bool, false otherwise
     pub fn is_boolean(&self, idx: c_int) -> bool {
@@ -576,6 +577,137 @@ impl Luau {
         unsafe { lua_tobuffer(self.state, idx, len) }
     }
 
+    /// Pushes an empty table to the Luau stack
+    pub fn create_table(&self) {
+        unsafe {
+            lua_createtable(self.state, 0, 0);
+        }
+    }
+
+    /// Pushes an empty table to the Luau stack with a preallocated array portion of `narr` and an associative portion of `nrec`
+    pub fn create_table_with_capacity(&self, narr: c_int, nrec: c_int) {
+        unsafe {
+            lua_createtable(self.state, narr, nrec);
+        }
+    }
+
+    pub fn shift(&self, to: c_int) {
+        luau_stack_precondition!(self.check_index(to));
+
+        unsafe {
+            lua_insert(self.state, to);
+        }
+    }
+
+    /// Returns true if the value at `idx` is a table, false otherwise
+    pub fn is_table(&self, idx: c_int) -> bool {
+        luau_stack_precondition!(self.check_index(idx));
+
+        unsafe { lua_istable(self.state, idx) }
+    }
+
+    /// Sets t\[k\] = v where k is the field string, t is the table at idx and k is the value on the top of the stack
+    ///
+    /// May invoke a __newindex metamethod
+    pub fn set_field(&self, idx: c_int, field: &str) {
+        assert!(self.is_table(idx), "Value at table index must be a table");
+        luau_stack_precondition!(self.check_stack(1));
+
+        let idx = self.absolutize(idx); // we do stack reordering so we need to absolutize the idx
+
+        self.push_string(field);
+        self.shift(-2);
+
+        self.set_table(idx);
+    }
+
+    /// Sets the value of t\[k\] with the value at the top of the stack where t is at the index and k is the value beneath the top of the stack.
+    ///
+    /// May invoke a __newindex metamethod
+    pub fn set_table(&self, idx: c_int) {
+        luau_stack_precondition!(self.check_index(idx));
+
+        // SAFETY: idx is validated by the precondition
+        unsafe {
+            lua_settable(self.state, idx);
+        }
+    }
+
+    /// Sets the value of t\[k\] with the value at the top of the stack where t is at the index and k is the value beneath the top of the stack.
+    ///
+    /// Will not invoke a __newindex metamethod
+    pub fn raw_set_table(&self, idx: c_int) {
+        luau_stack_precondition!(self.check_index(idx));
+
+        // SAFETY: idx is validated by the precondition
+        unsafe {
+            lua_rawset(self.state, idx);
+        }
+    }
+
+    /// Gets t\[k\] where k is the field string where t is the table at idx.
+    ///
+    /// May invoke a __index metamethod
+    pub fn get_field(&self, idx: c_int, field: &str) {
+        luau_stack_precondition!(self.check_index(idx));
+        luau_stack_precondition!(self.check_stack(1));
+
+        let idx = self.absolutize(idx); // we do stack changes so we need to absolutize the idx
+
+        self.push_string(field);
+        self.get_table(idx);
+    }
+
+    /// Gets the value of t\[k\] where t is the value at the index and k is the value on the top of the stack.
+    ///
+    /// May invoke a __index metamethod
+    pub fn get_table(&self, idx: c_int) {
+        luau_stack_precondition!(self.check_index(idx));
+
+        // SAFETY: idx is validated by the precondition
+        unsafe {
+            lua_gettable(self.state, idx);
+        }
+    }
+
+    /// Gets the value of t\[k\] where t is the value at the index and k is the value on the top of the stack.
+    ///
+    /// Will not invoke a __index metamethod
+    pub fn raw_get_table(&self, idx: c_int) {
+        luau_stack_precondition!(self.check_index(idx));
+
+        // SAFETY: idx is validated by the precondition
+        unsafe {
+            lua_rawget(self.state, idx);
+        }
+    }
+
+    /// Changes the readonly mode of a table at `idx` to the supplied boolean
+    pub fn set_readonly(&self, idx: c_int, enabled: bool) {
+        assert!(self.is_table(idx));
+
+        // SAFETY: is_table has a precondition to validate idx
+        unsafe {
+            lua_setreadonly(self.state, idx, enabled as c_int);
+        }
+    }
+
+    /// Sets the metatable for the value idx to the table located on the top of the stack.
+    ///
+    /// Sets the metatable for individual tables and userdata or sets the metatable for an entire type.
+    pub fn set_metatable(&self, idx: c_int) {
+        assert!(
+            self.is_table(-1),
+            "Expected the value at the top of the stack to be a table"
+        );
+
+        luau_stack_precondition!(self.check_index(idx));
+
+        unsafe {
+            lua_setmetatable(self.state, idx);
+        }
+    }
+
     /// Returns true if the value at `idx` is a function, false otherwise
     pub fn is_function(&self, idx: c_int) -> bool {
         luau_stack_precondition!(self.check_index(idx));
@@ -609,7 +741,9 @@ impl Luau {
                 self.state,
                 func,
                 if let Some(name) = debug_name {
-                    name.as_ptr() as *const c_char
+                    let name =
+                        CString::new(name).expect("chunk name should not contain a null byte");
+                    name.as_ptr()
                 } else {
                     null()
                 },
@@ -621,7 +755,7 @@ impl Luau {
     /// Pushes a Rust function into Luau
     ///
     /// This function wraps a Rust function to allow closures to capture values, to avoid this minor overhead you can use `push_function_raw`
-    pub fn push_function<F: Fn(Luau) -> i32>(
+    pub fn push_function<F: FnMut(Luau) -> i32>(
         &self,
         func: F,
         debug_name: Option<&str>,
@@ -636,7 +770,9 @@ impl Luau {
 
         let func_box = Box::new(func);
 
-        unsafe extern "C-unwind" fn invoke_fn<T: Fn(Luau) -> i32>(state: *mut _LuaState) -> c_int {
+        unsafe extern "C-unwind" fn invoke_fn<T: FnMut(Luau) -> i32>(
+            state: *mut _LuaState,
+        ) -> c_int {
             let func = lua_tolightuserdata(state, lua_upvalueindex(1)).cast::<T>();
 
             (*func)(Luau::from_ptr(state))
@@ -689,7 +825,7 @@ impl Luau {
         }
     }
 
-    #[cfg(feature="codegen")]
+    #[cfg(feature = "codegen")]
     /// Compiles a function with native code generation.
     ///
     /// This will fail silently if the codegen is not supported and initialized
@@ -752,7 +888,7 @@ impl Drop for Luau {
 
 #[cfg(test)]
 #[allow(non_snake_case)]
-mod binding_tests {
+mod tests {
     use std::{
         ffi::{c_int, c_void},
         hint::black_box,
@@ -823,6 +959,46 @@ mod binding_tests {
             load_result.is_err_and(|v| v == r#"[string ""]Error!"#),
             "Expected load result to be an error and be the correct error message."
         );
+    }
+
+    #[test]
+    fn tables() {
+        let luau = Luau::default();
+
+        luau.create_table();
+
+        luau.push_number(123.0);
+
+        luau.set_field(-2, "abc");
+
+        luau.get_field(-1, "abc");
+
+        assert_eq!(luau.to_number(-1), Some(123.0));
+    }
+
+    #[test]
+    fn metatables() {
+        let luau = Luau::default();
+
+        luau.create_table();
+        luau.create_table();
+
+        let mut called: Option<String> = None;
+        luau.push_function(
+            |luau| {
+                called = luau.to_str(-1).map(Result::unwrap).map(str::to_string);
+                0
+            },
+            None,
+            0,
+        );
+        luau.set_field(-2, "__index");
+        luau.set_metatable(-2);
+
+        let index = "Hello!".to_string();
+        luau.get_field(-1, &index);
+
+        assert_eq!(called, Some(index));
     }
 
     #[test]
