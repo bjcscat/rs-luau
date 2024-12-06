@@ -24,7 +24,7 @@ pub const fn lua_ispseudo(i: c_int) -> bool {
 // thread status; 0 is OK
 #[repr(C)]
 #[allow(non_camel_case_types)]
-pub enum LuaStatus {
+pub enum LuauStatus {
     /// OK status
     LUA_OK = 0,
     /// Yielded
@@ -507,7 +507,7 @@ extern "C-unwind" {
         nargs: c_int,
         nresults: c_int,
         errfunc: c_int,
-    ) -> LuaStatus;
+    ) -> LuauStatus;
 }
 
 extern "C-unwind" {
@@ -538,17 +538,17 @@ extern "C-unwind" {
     /// To resume a coroutine, you remove the *nresults yielded values from its stack, push the values to be passed as results from yield, and then call lua_resume.
     ///
     /// The parameter from represents the coroutine that is resuming L. If there is no such coroutine, this parameter can be NULL.
-    pub fn lua_resume(state: *mut _LuaState, from: *mut _LuaState, narg: c_int) -> LuaStatus;
+    pub fn lua_resume(state: *mut _LuaState, from: *mut _LuaState, narg: c_int) -> LuauStatus;
 
     /// Resumes a coroutine in the thread L
     ///
     /// This errors the thread
     ///
     /// The parameter from represents the coroutine that is resuming L. If there is no such coroutine, this parameter can be NULL.
-    pub fn lua_resumeerror(state: *mut _LuaState, from: *mut _LuaState) -> LuaStatus;
+    pub fn lua_resumeerror(state: *mut _LuaState, from: *mut _LuaState) -> LuauStatus;
 
     /// Returns the execution status of the provided luau state
-    pub fn lua_status(state: *mut _LuaState) -> LuaStatus;
+    pub fn lua_status(state: *mut _LuaState) -> LuauStatus;
 
     /// Returns true if the given coroutine can yield, and false otherwise.
     pub fn lua_isyieldable(state: *mut _LuaState) -> c_int;
@@ -900,7 +900,7 @@ pub struct LuaCallbacks {
     pub interrupt: Option<unsafe extern "C-unwind" fn(state: *mut _LuaState, gc: c_int)>,
 
     /// gets called when an unprotected error is raised (if longjmp is used)
-    pub panic: Option<unsafe extern "C-unwind" fn(state: *mut _LuaState, errcode: LuaStatus)>,
+    pub panic: Option<unsafe extern "C-unwind" fn(state: *mut _LuaState, errcode: LuauStatus)>,
 
     /// gets called when L is created (LP == parent) or destroyed (LP == NULL)
     pub userthread: Option<unsafe extern "C-unwind" fn(LP: *mut _LuaState, state: *mut _LuaState)>,
