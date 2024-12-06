@@ -23,6 +23,7 @@ pub const fn lua_ispseudo(i: c_int) -> bool {
 
 // thread status; 0 is OK
 #[repr(C)]
+#[derive(Debug)]
 #[allow(non_camel_case_types)]
 pub enum LuauStatus {
     /// OK status
@@ -1050,6 +1051,7 @@ pub unsafe fn lua_tostring(state: *mut _LuaState, i: c_int) -> *const c_char {
     lua_tolstring(state, i, null_mut())
 }
 
+#[macro_export]
 macro_rules! lua_pushformat {
     ($state:expr, $fmt:expr, $($args:tt)*) => {
         let string = std::fmt::format(format_args!($fmt, $($args)*));

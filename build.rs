@@ -53,7 +53,11 @@ fn do_cfg(config: &mut Config) {
     // maximum number of captures supported by pattern matching
     define_lua_cfg!(config, "LUA_MAXCAPTURES", "32");
 
+    #[cfg(not(feature="luau_vector4"))]
     define_lua_cfg!(config, "LUA_VECTOR_SIZE", "3");
+
+    #[cfg(feature="luau_vector4")]
+    define_lua_cfg!(config, "LUA_VECTOR_SIZE", "4");
 }
 
 fn main() {

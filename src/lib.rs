@@ -22,7 +22,7 @@ use ffi::{
     prelude::*,
 };
 use memory::{luau_alloc_cb, DefaultLuauAllocator};
-use threads::{LuauThread, MainStateDeadError};
+use threads::LuauThread;
 use userdata::{
     drop_userdata, dtor_rs_luau_userdata_callback, Userdata, UserdataBorrowError, UserdataRef,
     UserdataRefMut, UD_TAG,
@@ -176,7 +176,7 @@ impl Luau {
     }
 
     /// Yields the luau state with the number of results
-    /// 
+    ///
     /// Should be used as the end expression or a return from a function as this returns `-1`
     pub fn yield_luau(&self, nresults: c_int) -> c_int {
         assert!(
@@ -184,18 +184,14 @@ impl Luau {
             "The number of yield returns must not exceed the stack size"
         );
 
-        unsafe {
-            lua_yield(self.state, nresults)
-        }
+        unsafe { lua_yield(self.state, nresults) }
     }
 
     /// Breaks the luau state for the purposes of a debug interrupt
-    /// 
+    ///
     /// Should be used as the end expression or a return from a function as this returns `-1`
     pub fn break_luau(&self) -> c_int {
-        unsafe {
-            lua_break(self.state)
-        }
+        unsafe { lua_break(self.state) }
     }
 
     /// Returns the type of a luau value at `idx`
@@ -274,6 +270,26 @@ impl Luau {
             self.top() + 1 + idx
         } else {
             idx
+        }
+    }
+
+    pub fn check_args(&self, count: c_int, extra_message: Option<&str>) {
+        if self.top() >= count {
+            return;
+        }
+
+        unsafe {
+            luaL_argerrorL(
+                self.state,
+                count - self.top(),
+                extra_message
+                    .map(|v| {
+                        let cstr =
+                            CString::new(v).expect("extra_message should not contain a null byte");
+                        cstr.as_ptr()
+                    })
+                    .unwrap_or(null()),
+            );
         }
     }
 
@@ -747,8 +763,40 @@ impl Luau {
         }
     }
 
+    /// Returns true if the value at idx is a vector, false otherwise
     pub fn is_vector(&self, idx: c_int) -> bool {
         self.type_of(idx) == LuauType::LUA_TVECTOR
+    }
+
+    /// Pushes a vector to the Luau stack
+    pub fn push_vector(&self, x: f32, y: f32, z: f32, #[cfg(feature = "luau_vector4")] w: f32) {
+        luau_stack_precondition!(self.check_stack(1));
+
+        // SAFETY: stack size is validated by precondition
+        unsafe {
+            #[cfg(not(feature = "luau_vector4"))]
+            lua_pushvector(self.state, x, y, z);
+            #[cfg(feature = "luau_vector4")]
+            lua_pushvector(self.state, x, y, z, w);
+        }
+    }
+
+    #[cfg(not(feature = "luau_vector4"))]
+    /// Returns the value of a vector if the value at idx is a vector or will return None 
+    pub fn to_vector(&self, idx: c_int) -> Option<(f32, f32, f32)> {
+        luau_stack_precondition!(self.check_index(idx));
+        unsafe {
+            Option::from(lua_tovector(self.state, idx)).map(|ptr| (*ptr, *ptr.add(1), *ptr.add(2)))
+        }
+    }
+
+    #[cfg(feature = "luau_vector4")]
+    /// Returns the value of a vector if the value at idx is a vector or will return None
+    pub fn to_vector(&self, idx: c_int) -> Option<(f32, f32, f32, f32)> {
+        luau_stack_precondition!(self.check_index(idx));
+        unsafe {
+            Option::from(lua_tovector(self.state, idx)).map(|ptr| (*ptr, *ptr.add(1), *ptr.add(2), *ptr.add(3)))
+        }
     }
 
     /// Returns true if the value at `idx` is a thread, false otherwise
@@ -781,7 +829,9 @@ impl Luau {
     /// Resumes the given Luau thread with the number of arguments.
     ///
     /// Will resume the function on the top of the given Luau thread's execution stack
-    pub fn resume(&self, luau_thread: LuauThread, nargs: c_int) -> LuauStatus {
+    pub fn resume(&self, luau_thread: &LuauThread, nargs: c_int) -> LuauStatus {
+        assert!(luau_thread.get_state().is_function(-1));
+
         unsafe { lua_resume(luau_thread.get_state().state, self.state, nargs) }
     }
 
@@ -1051,6 +1101,7 @@ mod tests {
     use crate::{
         Luau, LuauAllocator, _LuaState, lua_error, lua_tonumber, lua_upvalueindex,
         userdata::{UserdataBorrowError, UserdataRef},
+        LuauStatus,
     };
 
     #[test]
@@ -1206,7 +1257,7 @@ mod tests {
             0,
         );
 
-        luau.resume(thread, 0);
+        luau.resume(&thread, 0);
 
         assert!(was_called, "Expected thread function to be called");
     }
@@ -1308,6 +1359,28 @@ mod tests {
 
     // todo!();
     // }
+
+    #[test]
+    fn function_check() {
+        let luau = Luau::default();
+
+        luau.push_function(
+            |l| {
+                l.check_args(1, None);
+
+                0
+            },
+            None,
+            0,
+        );
+
+        let status = luau.call(0, 0);
+
+        assert!(
+            matches!(status, LuauStatus::LUA_ERRRUN),
+            "Expected there to be a runtime error."
+        );
+    }
 
     #[test]
     fn userdata_borrow() {
