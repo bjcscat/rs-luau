@@ -135,7 +135,6 @@ impl Compiler {
         }
     }
 }
-
 pub struct CompilerResult {
     bytecode: *const i8,
     len: usize,

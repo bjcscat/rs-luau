@@ -1,5 +1,5 @@
 #[cfg(feature = "compiler")]
-mod compile;
+pub mod compile;
 
 mod ffi;
 mod memory;
