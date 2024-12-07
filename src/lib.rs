@@ -830,8 +830,6 @@ impl Luau {
     ///
     /// Will resume the function on the top of the given Luau thread's execution stack
     pub fn resume(&self, luau_thread: &LuauThread, nargs: c_int) -> LuauStatus {
-        assert!(luau_thread.get_state().is_function(-1));
-
         unsafe { lua_resume(luau_thread.get_state().state, self.state, nargs) }
     }
 
@@ -1099,9 +1097,7 @@ mod tests {
     };
 
     use crate::{
-        Luau, LuauAllocator, _LuaState, lua_error, lua_tonumber, lua_upvalueindex,
-        userdata::{UserdataBorrowError, UserdataRef},
-        LuauStatus,
+        Luau, LuauAllocator, _LuaState, compile::Compiler, lua_error, lua_tonumber, lua_upvalueindex, userdata::{UserdataBorrowError, UserdataRef}, LuauStatus
     };
 
     #[test]
@@ -1315,6 +1311,30 @@ mod tests {
         }
 
         luau.call(0, 0);
+    }
+
+    #[test]
+    fn continuations() {
+        let luau = Luau::default();
+        let compiler = Compiler::new();
+
+        let bc = compiler.compile("(...)()");
+
+        let thread = luau.push_thread();
+        let thread_state = thread.get_state();
+
+        let mut cont = false;
+
+        thread_state.push_function_continuation(|l| l.yield_luau(0), None, 0, |_,_| {
+            cont = true;
+            0
+        });
+        thread_state.load(None, bc.bytecode().unwrap(), 0).unwrap();
+
+        luau.resume(&thread, 1);
+        luau.resume(&thread, 0);
+
+        assert!(cont, "Expected that the continuation would be called.")
     }
 
     #[test]
