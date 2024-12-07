@@ -656,6 +656,29 @@ impl Luau {
         }
     }
 
+    /// Makes a reference to the value at `idx` which can be retrieved from `get_reference`
+    pub fn reference(&self, idx: c_int) -> RefIndex {
+        luau_stack_precondition!(self.check_index(idx));
+
+        // SAFETY: idx is checked
+        unsafe { lua_ref(self.state, idx) }
+    }
+
+    /// Retrieves a reference from a RefIndex and pushes it to the top of the stack while returning the type's value
+    pub fn get_reference(&self, ref_index: RefIndex) -> LuauType {
+        luau_stack_precondition!(self.check_stack(1));
+
+        // SAFETY: stack size is checked
+        unsafe { lua_getref(self.state, ref_index) }
+    }
+
+    /// Removes a reference
+    pub fn unreference(&self, ref_index: RefIndex) {
+        unsafe {
+            lua_unref(self.state, ref_index);
+        }
+    }
+
     /// Returns true if the value at `idx` is a table, false otherwise
     pub fn is_table(&self, idx: c_int) -> bool {
         self.type_of(idx) == LuauType::LUA_TTABLE
@@ -782,7 +805,7 @@ impl Luau {
     }
 
     #[cfg(not(feature = "luau_vector4"))]
-    /// Returns the value of a vector if the value at idx is a vector or will return None 
+    /// Returns the value of a vector if the value at idx is a vector or will return None
     pub fn to_vector(&self, idx: c_int) -> Option<(f32, f32, f32)> {
         luau_stack_precondition!(self.check_index(idx));
         unsafe {
@@ -795,7 +818,8 @@ impl Luau {
     pub fn to_vector(&self, idx: c_int) -> Option<(f32, f32, f32, f32)> {
         luau_stack_precondition!(self.check_index(idx));
         unsafe {
-            Option::from(lua_tovector(self.state, idx)).map(|ptr| (*ptr, *ptr.add(1), *ptr.add(2), *ptr.add(3)))
+            Option::from(lua_tovector(self.state, idx))
+                .map(|ptr| (*ptr, *ptr.add(1), *ptr.add(2), *ptr.add(3)))
         }
     }
 
@@ -1097,7 +1121,11 @@ mod tests {
     };
 
     use crate::{
-        Luau, LuauAllocator, _LuaState, compile::Compiler, lua_error, lua_tonumber, lua_upvalueindex, userdata::{UserdataBorrowError, UserdataRef}, LuauStatus
+        Luau, LuauAllocator, _LuaState,
+        compile::Compiler,
+        lua_error, lua_tonumber, lua_upvalueindex,
+        userdata::{UserdataBorrowError, UserdataRef},
+        LuauStatus,
     };
 
     #[test]
@@ -1325,10 +1353,15 @@ mod tests {
 
         let mut cont = false;
 
-        thread_state.push_function_continuation(|l| l.yield_luau(0), None, 0, |_,_| {
-            cont = true;
-            0
-        });
+        thread_state.push_function_continuation(
+            |l| l.yield_luau(0),
+            None,
+            0,
+            |_, _| {
+                cont = true;
+                0
+            },
+        );
         thread_state.load(None, bc.bytecode().unwrap(), 0).unwrap();
 
         luau.resume(&thread, 1);

@@ -1,4 +1,4 @@
-use std::{boxed, cell::Cell, error::Error, fmt::Display, rc::Rc};
+use std::{cell::Cell, error::Error, fmt::Display, rc::Rc};
 
 use crate::{Luau, _LuaState};
 
@@ -32,7 +32,7 @@ impl LuauThread {
     }
 
     pub fn try_get_state(&self) -> Result<&Luau, MainStateDeadError> {
-        if self.root_check.get() == false {
+        if !self.root_check.get() {
             Err(MainStateDeadError {})
         } else {
             Ok(unsafe { &*self.thread })

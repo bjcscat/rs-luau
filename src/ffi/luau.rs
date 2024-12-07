@@ -716,7 +716,7 @@ pub const LUA_REFNIL: c_int = 0;
 /// Index into the Luau registry created by lua_ref
 ///
 /// Reference indexes are not regular stack indexes and should be handled through lua_getref
-pub struct RefIndex(pub c_int);
+pub struct RefIndex(pub(crate) c_int);
 
 extern "C-unwind" {
     /// Creates a Luau reference which is used to "pin" a value in a specified place
