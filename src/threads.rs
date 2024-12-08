@@ -1,10 +1,11 @@
-use std::{cell::Cell, error::Error, fmt::Display, rc::Rc};
+use std::{cell::Cell, error::Error, fmt::Display, marker::PhantomData, rc::Rc};
 
 use crate::{Luau, _LuaState};
 
-pub struct LuauThread {
+pub struct LuauThread<'lua> {
     root_check: Rc<Cell<bool>>,
     thread: *mut Luau,
+    _marker: PhantomData<&'lua Luau>
 }
 
 #[derive(Debug)]
@@ -21,13 +22,14 @@ impl Display for MainStateDeadError {
     }
 }
 
-impl LuauThread {
+impl LuauThread<'_> {
     pub unsafe fn from_ptr(state: *mut _LuaState, root_check: Rc<Cell<bool>>) -> Self {
         let boxed_luau = Box::new(Luau::from_ptr(state));
         
         Self {
             root_check,
-            thread: Box::into_raw(boxed_luau)
+            thread: Box::into_raw(boxed_luau),
+            _marker: PhantomData {}
         }
     }
 
