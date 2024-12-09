@@ -942,8 +942,8 @@ impl Luau {
     ///
     /// This function wraps a Rust function to allow closures to capture values, to avoid this minor overhead you can use `push_function_raw`
     pub fn push_function_continuation<
-        F: FnMut(Luau) -> c_int,
-        Cont: FnMut(Luau, LuauStatus) -> c_int,
+        F: FnMut(&Luau) -> c_int,
+        Cont: FnMut(&Luau, LuauStatus) -> c_int,
     >(
         &self,
         func: F,
@@ -966,20 +966,22 @@ impl Luau {
         let call_state = Box::new(CallState { func, cont });
 
         unsafe extern "C-unwind" fn invoke_fn<
-            F: FnMut(Luau) -> c_int,
-            Cont: FnMut(Luau, LuauStatus) -> c_int,
+            F: FnMut(&Luau) -> c_int,
+            Cont: FnMut(&Luau, LuauStatus) -> c_int,
         >(
             state: *mut _LuaState,
         ) -> c_int {
             let call_state =
                 lua_tolightuserdata(state, lua_upvalueindex(1)).cast::<CallState<F, Cont>>();
 
-            ((*call_state).func)(Luau::from_ptr(state))
+            let luau = Luau::from_ptr(state);
+
+            ((*call_state).func)(&luau)
         }
 
         unsafe extern "C-unwind" fn invoke_continuation<
-            F: FnMut(Luau) -> c_int,
-            Cont: FnMut(Luau, LuauStatus) -> c_int,
+            F: FnMut(&Luau) -> c_int,
+            Cont: FnMut(&Luau, LuauStatus) -> c_int,
         >(
             state: *mut _LuaState,
             status: c_int,
@@ -987,10 +989,8 @@ impl Luau {
             let call_state =
                 lua_tolightuserdata(state, lua_upvalueindex(1)).cast::<CallState<F, Cont>>();
 
-            ((*call_state).cont)(
-                Luau::from_ptr(state),
-                std::mem::transmute::<c_int, LuauStatus>(status),
-            )
+            let luau = Luau::from_ptr(state);
+            ((*call_state).cont)(&luau, std::mem::transmute::<c_int, LuauStatus>(status))
         }
 
         unsafe {
@@ -1008,7 +1008,7 @@ impl Luau {
     /// Pushes a Rust function into Luau
     ///
     /// This function wraps a Rust function to allow closures to capture values, to avoid this minor overhead you can use `push_function_raw`
-    pub fn push_function<F: FnMut(Luau) -> i32>(
+    pub fn push_function<F: FnMut(&Luau) -> i32>(
         &self,
         func: F,
         debug_name: Option<&str>,
@@ -1023,12 +1023,13 @@ impl Luau {
 
         let func_box = Box::new(func);
 
-        unsafe extern "C-unwind" fn invoke_fn<T: FnMut(Luau) -> i32>(
+        unsafe extern "C-unwind" fn invoke_fn<T: FnMut(&Luau) -> i32>(
             state: *mut _LuaState,
         ) -> c_int {
             let func = lua_tolightuserdata(state, lua_upvalueindex(1)).cast::<T>();
 
-            (*func)(Luau::from_ptr(state))
+            let state = Luau::from_ptr(state);
+            (*func)(&state)
         }
 
         unsafe {
