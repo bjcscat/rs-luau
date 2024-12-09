@@ -1,7 +1,7 @@
 #[cfg(feature = "compiler")]
 pub mod compile;
 
-mod ffi;
+pub mod ffi;
 mod memory;
 mod threads;
 mod userdata;
@@ -29,6 +29,7 @@ use userdata::{
 };
 
 pub use memory::LuauAllocator;
+pub use ffi::prelude::LuauStatus;
 
 macro_rules! luau_stack_precondition {
     ($cond:expr) => {
