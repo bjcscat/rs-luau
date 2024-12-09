@@ -687,16 +687,39 @@ impl Luau {
     /// Sets t\[k\] = v where k is the field string, t is the table at idx and k is the value on the top of the stack
     ///
     /// May invoke a __newindex metamethod
-    pub fn set_field(&self, idx: c_int, field: &str) {
-        assert!(self.is_table(idx), "Value at table index must be a table");
+    pub fn set_field(&self, idx: c_int, field: impl AsRef<[u8]>) {
         luau_stack_precondition!(self.check_stack(1));
 
-        let idx = self.absolutize(idx); // we do stack reordering so we need to absolutize the idx
+        // idx is the value and the table
+        let idx = if idx < 0 || idx == self.top() {
+            idx - 1 // shifted
+        } else {
+            idx
+        };
 
         self.push_string(field);
         self.shift(-2);
 
         self.set_table(idx);
+    }
+
+    /// Sets t\[k\] = v where k is the field string, t is the table at idx and k is the value on the top of the stack
+    ///
+    /// Will not invoke a __newindex metamethod
+    pub fn raw_set_field(&self, idx: c_int, field: &str) {
+        luau_stack_precondition!(self.check_stack(1));
+
+        // idx is the value and the table
+        let idx = if idx < 0 || idx == self.top() {
+            idx - 1 // shifted
+        } else {
+            idx
+        };
+
+        self.push_string(field);
+        self.shift(-2);
+
+        self.raw_set_table(idx);
     }
 
     /// Sets the value of t\[k\] with the value at the top of the stack where t is at the index and k is the value beneath the top of the stack.
@@ -726,14 +749,29 @@ impl Luau {
     /// Gets t\[k\] where k is the field string where t is the table at idx.
     ///
     /// May invoke a __index metamethod
-    pub fn get_field(&self, idx: c_int, field: &str) {
+    pub fn get_field(&self, idx: c_int, field: impl AsRef<[u8]>) {
         luau_stack_precondition!(self.check_index(idx));
         luau_stack_precondition!(self.check_stack(1));
 
-        let idx = self.absolutize(idx); // we do stack changes so we need to absolutize the idx
+        // we change the top
+        let idx = if idx < 0 { idx - 1 } else { idx };
 
         self.push_string(field);
         self.get_table(idx);
+    }
+
+    /// Gets t\[k\] where k is the field string where t is the table at idx.
+    ///
+    /// Will not invoke a __index metamethod
+    pub fn raw_get_field(&self, idx: c_int, field: impl AsRef<[u8]>) {
+        luau_stack_precondition!(self.check_index(idx));
+        luau_stack_precondition!(self.check_stack(1));
+
+        // we change the top
+        let idx = if idx < 0 { idx - 1 } else { idx };
+
+        self.push_string(field);
+        self.raw_get_table(idx);
     }
 
     /// Gets the value of t\[k\] where t is the value at the index and k is the value on the top of the stack.
