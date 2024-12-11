@@ -2,6 +2,7 @@
 pub mod compile;
 
 pub mod ffi;
+mod libs;
 mod memory;
 mod threads;
 mod userdata;
@@ -11,10 +12,13 @@ use std::{
     any::Any,
     cell::Cell,
     ffi::{c_int, c_uint, CString},
+    future::Future,
     os::raw::c_void,
+    pin::Pin,
     ptr::{null, null_mut},
     rc::Rc,
     slice,
+    task::{Context, RawWakerVTable, Waker},
 };
 
 use ffi::{
@@ -28,8 +32,9 @@ use userdata::{
     UserdataRefMut, UD_TAG,
 };
 
-pub use memory::LuauAllocator;
 pub use ffi::prelude::LuauStatus;
+pub use libs::LuauLibs;
+pub use memory::LuauAllocator;
 
 macro_rules! luau_stack_precondition {
     ($cond:expr) => {
@@ -96,7 +101,7 @@ impl Luau {
     /// Creates a Luau struct from a raw state pointer
     ///
     /// # Safety
-    /// The pointer must be a valid Luau state
+    /// The pointer must be a valid Luau state created by `Luau::new`
     pub unsafe fn from_ptr(state: *mut _LuaState) -> Self {
         Self {
             owned: false,
@@ -141,13 +146,6 @@ impl Luau {
             .and_then(|v| v.downcast_ref())
     }
 
-    pub fn get_app_data_mut<T: Any>(&self) -> Option<&mut T> {
-        unsafe { &mut *self.get_associated_mut() }
-            .app_data
-            .as_mut()
-            .and_then(|v| v.downcast_mut())
-    }
-
     /// Sets the associated app data for the Luau state returning the previous value
     pub fn set_app_data<T: Any>(&self, ud: Option<T>) -> Option<Box<dyn Any>> {
         let associated = unsafe { &mut *self.get_associated_mut() };
@@ -158,6 +156,72 @@ impl Luau {
             associated.app_data.replace(boxed_data)
         } else {
             associated.app_data.take()
+        }
+    }
+
+    pub fn load_libs(&self, lib: LuauLibs) {
+        macro_rules! load_lib {
+            ($func:ident) => {
+                unsafe {
+                    self.push_raw_function($func, Some(stringify!($func)), 0, None);
+                    self.push_string("");
+                    self.call(1, 0);
+                };
+            };
+
+            ($idnt:expr, $func:ident) => {
+                unsafe {
+                    self.push_raw_function($func, Some(stringify!($func)), 0, None);
+                    self.push_string($idnt);
+                    self.call(1, 0);
+                };
+            };
+        }
+
+        if lib.has(LuauLibs::ALL_LIBS) {
+            unsafe { luaL_openlibs(self.state) };
+
+            return;
+        }
+
+        if lib.has(LuauLibs::LIB_BASE) {
+            load_lib!(luaopen_base);
+        }
+
+        if lib.has(LuauLibs::LIB_COROUTINE) {
+            load_lib!(LUA_COLIBNAME, luaopen_coroutine);
+        }
+
+        if lib.has(LuauLibs::LIB_TABLE) {
+            load_lib!(LUA_TABLIBNAME, luaopen_table);
+        }
+
+        if lib.has(LuauLibs::LIB_OS) {
+            load_lib!(LUA_OSLIBNAME, luaopen_os);
+        }
+
+        if lib.has(LuauLibs::LIB_STRING) {
+            load_lib!(LUA_STRLIBNAME, luaopen_string);
+        }
+
+        if lib.has(LuauLibs::LIB_MATH) {
+            load_lib!(LUA_MATHLIBNAME, luaopen_math);
+        }
+
+        if lib.has(LuauLibs::LIB_DEBUG) {
+            load_lib!(LUA_DBLIBNAME, luaopen_debug);
+        }
+
+        if lib.has(LuauLibs::LIB_UTF8) {
+            load_lib!(LUA_UTF8LIBNAME, luaopen_utf8);
+        }
+
+        if lib.has(LuauLibs::LIB_BIT32) {
+            load_lib!(LUA_BITLIBNAME, luaopen_bit32);
+        }
+
+        if lib.has(LuauLibs::LIB_BUFFER) {
+            load_lib!(LUA_BUFFERLIBNAME, luaopen_buffer);
         }
     }
 
@@ -228,6 +292,16 @@ impl Luau {
         }
     }
 
+    fn absolutize(&self, idx: c_int) -> c_int {
+        if lua_ispseudo(idx) {
+            idx
+        } else if idx < 0 {
+            self.top() + idx + 1
+        } else {
+            idx
+        }
+    }
+
     pub fn check_index(&self, idx: c_int) -> bool {
         if idx <= LUA_REGISTRYINDEX {
             return true;
@@ -264,14 +338,6 @@ impl Luau {
     #[inline]
     pub fn globals(&self) -> c_int {
         LUA_GLOBALSINDEX
-    }
-
-    fn absolutize(&self, idx: c_int) -> c_int {
-        if idx < 0 {
-            self.top() + 1 + idx
-        } else {
-            idx
-        }
     }
 
     pub fn check_args(&self, count: c_int, extra_message: Option<&str>) {
@@ -691,9 +757,9 @@ impl Luau {
     pub fn set_field(&self, idx: c_int, field: impl AsRef<[u8]>) {
         luau_stack_precondition!(self.check_stack(1));
 
-        // idx is the value and the table
-        let idx = if idx < 0 || idx == self.top() {
-            idx - 1 // shifted
+        // bad hack
+        let idx = if idx < 0 && !lua_ispseudo(idx) && !(idx == -1 && self.top() == 1) {
+            idx - 1
         } else {
             idx
         };
@@ -710,9 +776,8 @@ impl Luau {
     pub fn raw_set_field(&self, idx: c_int, field: &str) {
         luau_stack_precondition!(self.check_stack(1));
 
-        // idx is the value and the table
-        let idx = if idx < 0 || idx == self.top() {
-            idx - 1 // shifted
+        let idx = if idx < 0 && !lua_ispseudo(idx) && !(idx == -1 && self.top() == 1) {
+            idx - 1
         } else {
             idx
         };
@@ -727,6 +792,10 @@ impl Luau {
     ///
     /// May invoke a __newindex metamethod
     pub fn set_table(&self, idx: c_int) {
+        assert!(
+            self.top() >= 2,
+            "There must be a key and value on the stack to set table"
+        );
         luau_stack_precondition!(self.check_index(idx));
 
         // SAFETY: idx is validated by the precondition
@@ -739,6 +808,10 @@ impl Luau {
     ///
     /// Will not invoke a __newindex metamethod
     pub fn raw_set_table(&self, idx: c_int) {
+        assert!(
+            self.top() >= 2,
+            "There must be a key and value on the stack to set table"
+        );
         luau_stack_precondition!(self.check_index(idx));
 
         // SAFETY: idx is validated by the precondition
@@ -754,8 +827,11 @@ impl Luau {
         luau_stack_precondition!(self.check_index(idx));
         luau_stack_precondition!(self.check_stack(1));
 
-        // we change the top
-        let idx = if idx < 0 { idx - 1 } else { idx };
+        let idx = if idx < 0 && !lua_ispseudo(idx) {
+            idx - 1
+        } else {
+            idx
+        };
 
         self.push_string(field);
         self.get_table(idx);
@@ -768,8 +844,11 @@ impl Luau {
         luau_stack_precondition!(self.check_index(idx));
         luau_stack_precondition!(self.check_stack(1));
 
-        // we change the top
-        let idx = if idx < 0 { idx - 1 } else { idx };
+        let idx = if idx < 0 && !lua_ispseudo(idx) {
+            idx - 1
+        } else {
+            idx
+        };
 
         self.push_string(field);
         self.raw_get_table(idx);
@@ -779,6 +858,10 @@ impl Luau {
     ///
     /// May invoke a __index metamethod
     pub fn get_table(&self, idx: c_int) {
+        assert!(
+            self.top() >= 1,
+            "There must be a key on the stack to index the table"
+        );
         luau_stack_precondition!(self.check_index(idx));
 
         // SAFETY: idx is validated by the precondition
@@ -791,6 +874,10 @@ impl Luau {
     ///
     /// Will not invoke a __index metamethod
     pub fn raw_get_table(&self, idx: c_int) {
+        assert!(
+            self.top() >= 1,
+            "There must be a key on the stack to index the table"
+        );
         luau_stack_precondition!(self.check_index(idx));
 
         // SAFETY: idx is validated by the precondition
@@ -886,6 +973,24 @@ impl Luau {
             }
         } else {
             None
+        }
+    }
+
+    /// Returns the thread local userdata
+    pub fn get_thread_data<T: Any>(&self) -> Option<&T> {        
+        let boxed = unsafe {
+            (lua_getthreaddata(self.state) as *const Box<dyn Any>).as_ref()?
+        };
+
+        boxed.downcast_ref()
+    }
+
+    /// Sets the thread local userdata
+    pub fn set_thread_data<T: Any>(&self, userdata: T) {
+        let b: Box<dyn Any> = Box::new(userdata);
+
+        unsafe {
+            lua_setthreaddata(self.state, Box::into_raw(b) as _);
         }
     }
 
@@ -1165,7 +1270,7 @@ mod tests {
         compile::Compiler,
         lua_error, lua_tonumber, lua_upvalueindex,
         userdata::{UserdataBorrowError, UserdataRef},
-        LuauStatus,
+        LuauLibs, LuauStatus, LuauType,
     };
 
     #[test]
@@ -1230,6 +1335,21 @@ mod tests {
     }
 
     #[test]
+    fn load_libs() {
+        let luau = Luau::default();
+
+        luau.load_libs(LuauLibs::ALL_LIBS);
+
+        luau.get_field(luau.globals(), "table");
+
+        assert_eq!(luau.type_of(-1), LuauType::LUA_TTABLE);
+
+        luau.get_field(luau.globals(), "print");
+
+        assert_eq!(luau.type_of(-1), LuauType::LUA_TFUNCTION);
+    }
+
+    #[test]
     fn tables() {
         let luau = Luau::default();
 
@@ -1242,6 +1362,11 @@ mod tests {
         luau.get_field(-1, "abc");
 
         assert_eq!(luau.to_number(-1), Some(123.0));
+
+        luau.pop(1);
+
+        // should be valid
+        luau.set_field(-1, "a");
     }
 
     #[test]

@@ -4,10 +4,10 @@ version = "0.0.1"
 edition = "2021"
 
 [features]
-default=["compiler", "codegen"]
+default = ["compiler", "codegen"]
 compiler = []
 codegen = []
-luau_vector4=[]
+luau_vector4 = []
 
 [build-dependencies]
 cmake = "0.1.51"

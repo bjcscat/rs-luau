@@ -135,6 +135,13 @@ impl Compiler {
         }
     }
 }
+
+impl Default for Compiler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub struct CompilerResult {
     bytecode: *const i8,
     len: usize,
