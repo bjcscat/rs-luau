@@ -129,7 +129,7 @@ impl Compiler {
                 source.len(),
                 self.options.get(),
                 &raw mut len,
-            );
+            ) as *const i8; // explicit conversion needed to compile on android
 
             CompilerResult { bytecode, len }
         }
