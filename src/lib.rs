@@ -1157,7 +1157,7 @@ impl Luau {
         let success = unsafe {
             luau_load(
                 self.state,
-                chunk_name.map(CStr::as_ptr).unwrap_or(null()),
+                chunk_name.unwrap_or(c"").as_ptr(),
                 bytecode.as_ptr() as _,
                 bytecode.len(),
                 env,
@@ -1324,6 +1324,10 @@ mod tests {
         assert!(result.is_ok(), "Compiler result is expected to be OK");
 
         let load_result = luau.load(None, result.bytecode().unwrap(), 0);
+
+        assert!(load_result.is_ok(), "Load result should be Ok");
+
+        let load_result = luau.load(Some(c"test"), result.bytecode().unwrap(), 0);
 
         assert!(load_result.is_ok(), "Load result should be Ok");
 
@@ -1590,6 +1594,24 @@ mod tests {
             matches!(status, LuauStatus::LUA_ERRRUN),
             "Expected there to be a runtime error."
         );
+
+        luau.push_function(
+            |l| {
+                l.check_args(1, None);
+
+                0
+            },
+            Some(c"test"),
+            0,
+        );
+
+        let status = luau.call(0, 0);
+
+        assert!(
+            matches!(status, LuauStatus::LUA_ERRRUN),
+            "Expected there to be a runtime error."
+        );
+
     }
 
     #[test]

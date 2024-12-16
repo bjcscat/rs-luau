@@ -258,6 +258,27 @@ mod tests {
     }
 
     #[test]
+    fn cloned_compiler() {
+        let compiler = {
+            let original_compiler = Compiler::new();
+            original_compiler.clone()
+        };
+
+        // has an effect so cant be optimized out entirely
+        let result = compiler.compile("v()");
+
+        assert!(result.is_ok(), "Expected result to be a success");
+        assert!(
+            result.bytecode().is_some(),
+            "Expected resultant bytecode to be some"
+        );
+        assert!(
+            result.bytecode().is_some_and(|v| !v.is_empty()),
+            "Expected resultant bytecode to be non-empty"
+        );
+    }
+    
+    #[test]
     fn compiler_error() {
         let compiler = Compiler::new();
 
