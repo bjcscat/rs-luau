@@ -1,5 +1,7 @@
-use core::str;
-use std::{cell::UnsafeCell, ffi::{c_char, c_int}};
+use std::{
+    cell::UnsafeCell,
+    ffi::{c_char, c_int},
+};
 
 use crate::{cstdlib_free, luau_compile, LuauCompileOptions};
 
@@ -24,34 +26,30 @@ impl Compiler {
         }
     }
 
-    fn options(&mut self) -> &mut LuauCompileOptions {
-        self.options.get_mut()
-    }
-
     /// Sets the optimization level for the compiler
     pub fn optimization_level(&mut self, level: c_int) -> &mut Self {
-        self.options().optimization_level = level;
+        self.options.get_mut().optimization_level = level;
 
         self
     }
 
     /// Sets the debug level for the compiler
     pub fn debug_level(&mut self, level: c_int) -> &mut Self {
-        self.options().debug_level = level;
+        self.options.get_mut().debug_level = level;
 
         self
     }
 
     /// Sets the type info level for the compiler
     pub fn type_info_level(&mut self, level: c_int) -> &mut Self {
-        self.options().type_info_level = level;
+        self.options.get_mut().type_info_level = level;
 
         self
     }
 
     /// Sets the coverage level for the compiler
     pub fn coverage_level(&mut self, level: c_int) -> &mut Self {
-        self.options().coverage_level = level;
+        self.options.get_mut().coverage_level = level;
 
         self
     }
@@ -60,7 +58,7 @@ impl Compiler {
     pub fn vector_lib(&mut self, lib: impl AsRef<[u8]>) -> &mut Self {
         let lib: Box<[u8]> = Box::from(lib.as_ref());
 
-        self.options().vector_lib = lib.as_ptr() as _;
+        self.options.get_mut().vector_lib = lib.as_ptr() as _;
         self._vector_lib = Some(lib);
 
         self
@@ -70,7 +68,7 @@ impl Compiler {
     pub fn vector_ctor(&mut self, ctor: impl AsRef<[u8]>) -> &mut Self {
         let ctor: Box<[u8]> = Box::from(ctor.as_ref());
 
-        self.options().vector_ctor = ctor.as_ptr() as _;
+        self.options.get_mut().vector_ctor = ctor.as_ptr() as _;
         self._vector_ctor = Some(ctor);
 
         self
@@ -80,7 +78,7 @@ impl Compiler {
     pub fn vector_type(&mut self, vec_type: impl AsRef<[u8]>) -> &mut Self {
         let vector_type: Box<[u8]> = Box::from(vec_type.as_ref());
 
-        self.options().vector_type = vector_type.as_ptr() as _;
+        self.options.get_mut().vector_type = vector_type.as_ptr() as _;
         self._vector_type = Some(vector_type);
 
         self
@@ -97,7 +95,7 @@ impl Compiler {
             vector.push(boxed);
         }
 
-        self.options().mutable_globals = pointer_vectors.as_ptr() as *const *const _;
+        self.options.get_mut().mutable_globals = pointer_vectors.as_ptr() as *const *const _;
         self._mutable_globals = Some(vector);
 
         self
@@ -114,7 +112,7 @@ impl Compiler {
             vector.push(boxed);
         }
 
-        self.options().userdata_types = pointer_vectors.as_ptr() as *const *const _;
+        self.options.get_mut().userdata_types = pointer_vectors.as_ptr() as *const *const _;
         self._userdata_types = Some(vector);
 
         self
@@ -133,6 +131,39 @@ impl Compiler {
 
             CompilerResult { bytecode, len }
         }
+    }
+}
+
+impl Clone for Compiler {
+    fn clone(&self) -> Self {
+        let mut options = Self::new();
+
+        // not aliasing a mutable reference
+        let original_options = unsafe { self.options.get().as_ref() }.unwrap();
+
+        options.optimization_level(original_options.optimization_level);
+        options.debug_level(original_options.debug_level);
+        options.type_info_level(original_options.type_info_level);
+        options.coverage_level(original_options.coverage_level);
+
+        if let Some(vector_lib) = &self._vector_lib {
+            options.vector_lib(vector_lib);
+        }
+        if let Some(vector_ctor) = &self._vector_ctor {
+            options.vector_ctor(vector_ctor);
+        }
+        if let Some(vector_type) = &self._vector_type {
+            options.vector_type(vector_type);
+        }
+        if let Some(mutable_globals) = &self._mutable_globals {
+            options.mutable_globals(mutable_globals);
+        }
+
+        if let Some(userdata_types) = &self._userdata_types {
+            options.userdata_types(userdata_types);
+        }
+
+        options
     }
 }
 
@@ -167,7 +198,7 @@ impl CompilerResult {
         } else {
             unsafe {
                 Some(
-                    str::from_utf8(std::slice::from_raw_parts(
+                    std::str::from_utf8(std::slice::from_raw_parts(
                         self.bytecode.add(1) as _,
                         self.len - 1,
                     ))
