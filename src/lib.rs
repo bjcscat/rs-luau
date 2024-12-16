@@ -7,18 +7,13 @@ mod memory;
 mod threads;
 mod userdata;
 
-use core::str;
 use std::{
     any::Any,
     cell::Cell,
-    ffi::{c_int, c_uint, CString},
-    future::Future,
-    os::raw::c_void,
-    pin::Pin,
+    ffi::{c_int, c_uint, c_void, CStr, CString},
     ptr::{null, null_mut},
     rc::Rc,
     slice,
-    task::{Context, RawWakerVTable, Waker},
 };
 
 use ffi::{
@@ -163,7 +158,12 @@ impl Luau {
         macro_rules! load_lib {
             ($func:ident) => {
                 unsafe {
-                    self.push_raw_function($func, Some(stringify!($func)), 0, None);
+                    self.push_raw_function(
+                        $func,
+                        Some(&CString::new(stringify!($func)).unwrap()),
+                        0,
+                        None,
+                    );
                     self.push_string("");
                     self.call(1, 0);
                 };
@@ -171,7 +171,12 @@ impl Luau {
 
             ($idnt:expr, $func:ident) => {
                 unsafe {
-                    self.push_raw_function($func, Some(stringify!($func)), 0, None);
+                    self.push_raw_function(
+                        $func,
+                        Some(&CString::new(stringify!($func)).unwrap()),
+                        0,
+                        None,
+                    );
                     self.push_string($idnt);
                     self.call(1, 0);
                 };
@@ -300,16 +305,6 @@ impl Luau {
         }
     }
 
-    fn absolutize(&self, idx: c_int) -> c_int {
-        if lua_ispseudo(idx) {
-            idx
-        } else if idx < 0 {
-            self.top() + idx + 1
-        } else {
-            idx
-        }
-    }
-
     pub fn check_index(&self, idx: c_int) -> bool {
         if idx <= LUA_REGISTRYINDEX {
             return true;
@@ -348,7 +343,7 @@ impl Luau {
         LUA_GLOBALSINDEX
     }
 
-    pub fn check_args(&self, count: c_int, extra_message: Option<&str>) {
+    pub fn check_args(&self, count: c_int, extra_message: Option<&CStr>) {
         if self.top() >= count {
             return;
         }
@@ -357,13 +352,7 @@ impl Luau {
             luaL_argerrorL(
                 self.state,
                 count - self.top(),
-                extra_message
-                    .map(|v| {
-                        let cstr =
-                            CString::new(v).expect("extra_message should not contain a null byte");
-                        cstr.as_ptr()
-                    })
-                    .unwrap_or(null()),
+                extra_message.map(CStr::as_ptr).unwrap_or(null()),
             );
         }
     }
@@ -494,9 +483,9 @@ impl Luau {
     }
 
     /// Gets or tries to coerce a Luau value at `idx` into a str reference
-    pub fn to_str(&self, idx: c_int) -> Option<Result<&str, str::Utf8Error>> {
+    pub fn to_str(&self, idx: c_int) -> Option<Result<&str, std::str::Utf8Error>> {
         // preconditions are checked by to_string_slice
-        self.to_str_slice(idx).map(|v| str::from_utf8(v))
+        self.to_str_slice(idx).map(|v| std::str::from_utf8(v))
     }
 
     /// Gets or converts a Luau value at `idx` into a string with a reasonable format, will invoke __tostring metamethods.
@@ -508,8 +497,7 @@ impl Luau {
             let data = luaL_tolstring(self.state, idx, &raw mut len);
 
             if data.is_null() {
-                // shouldnt be possible
-                panic!("Luau string conversion returned NULL ptr");
+                unreachable!("Luau string conversion returned NULL ptr");
             } else {
                 std::slice::from_raw_parts(data as _, len)
             }
@@ -908,11 +896,6 @@ impl Luau {
     ///
     /// Sets the metatable for individual tables and userdata or sets the metatable for an entire type.
     pub fn set_metatable(&self, idx: c_int) {
-        assert!(
-            self.is_table(-1),
-            "Expected the value at the top of the stack to be a table"
-        );
-
         luau_stack_precondition!(self.check_index(idx));
 
         unsafe {
@@ -962,7 +945,7 @@ impl Luau {
         self.type_of(idx) == LuauType::LUA_TTHREAD
     }
 
-    pub fn push_thread(&self) -> LuauThread {
+    pub fn new_thread(&self) -> LuauThread {
         unsafe {
             let thread_ptr = lua_newthread(self.state);
             LuauThread::from_ptr(thread_ptr, self.get_associated().main_thread_rc.clone())
@@ -1021,7 +1004,7 @@ impl Luau {
     pub unsafe fn push_raw_function(
         &self,
         func: CFunction,
-        debug_name: Option<&str>,
+        debug_name: Option<&CStr>,
         num_upvals: c_int,
         continuation: Option<LuaContinuation>,
     ) {
@@ -1038,8 +1021,6 @@ impl Luau {
                 self.state,
                 func,
                 if let Some(name) = debug_name {
-                    let name =
-                        CString::new(name).expect("chunk name should not contain a null byte");
                     name.as_ptr()
                 } else {
                     null()
@@ -1059,7 +1040,7 @@ impl Luau {
     >(
         &self,
         func: F,
-        debug_name: Option<&str>,
+        debug_name: Option<&CStr>,
         num_upvals: c_int,
         cont: Cont,
     ) {
@@ -1123,7 +1104,7 @@ impl Luau {
     pub fn push_function<F: FnMut(&Luau) -> i32>(
         &self,
         func: F,
-        debug_name: Option<&str>,
+        debug_name: Option<&CStr>,
         num_upvals: c_int,
     ) {
         assert!(
@@ -1169,14 +1150,14 @@ impl Luau {
     }
 
     /// Loads bytecode into the VM and pushes a function to the stack
-    pub fn load(&self, chunk_name: Option<&str>, bytecode: &[u8], env: c_int) -> Result<(), &str> {
+    pub fn load(&self, chunk_name: Option<&CStr>, bytecode: &[u8], env: c_int) -> Result<(), &str> {
         luau_stack_precondition!(self.check_index(env));
         luau_stack_precondition!(self.check_stack(2));
 
         let success = unsafe {
             luau_load(
                 self.state,
-                chunk_name.or(Some("\0")).map(str::as_ptr).unwrap() as _,
+                chunk_name.map(CStr::as_ptr).unwrap_or(null()),
                 bytecode.as_ptr() as _,
                 bytecode.len(),
                 env,
@@ -1265,7 +1246,7 @@ impl Drop for Luau {
 #[macro_export]
 macro_rules! try_luau {
     ($state:ident, $block:block) => {{
-        $state.push_function(|$state| $block, Some("_try_lua"), 0);
+        $state.push_function(|$state| $block, Some(c"_try_lua"), 0);
         $state.call(0, 0)
     }};
 }
@@ -1462,7 +1443,7 @@ mod tests {
     fn threads() {
         let luau = Luau::default();
 
-        let thread = luau.push_thread();
+        let thread = luau.new_thread();
         let thread_state = thread.get_state();
 
         let mut was_called = false;
@@ -1506,7 +1487,7 @@ mod tests {
 
                 0
             },
-            Some("test"),
+            Some(c"test"),
             3,
         );
 
@@ -1530,7 +1511,7 @@ mod tests {
         }
 
         unsafe {
-            luau.push_raw_function(test_extern_fn, Some("test"), 3, None);
+            luau.push_raw_function(test_extern_fn, Some(c"test"), 3, None);
         }
 
         luau.call(0, 0);
@@ -1543,7 +1524,7 @@ mod tests {
 
         let bc = compiler.compile("(...)()");
 
-        let thread = luau.push_thread();
+        let thread = luau.new_thread();
         let thread_state = thread.get_state();
 
         let mut cont = false;
