@@ -76,15 +76,3 @@ impl BitAndAssign for LuauLibs {
         *self = LuauLibs(self.0 & rhs.0)
     }
 }
-
-#[cfg(test)]
-mod v {
-    use super::LuauLibs;
-
-    #[test]
-    fn a() {
-        let mut lib = LuauLibs::LIB_BUFFER;
-
-        lib |= LuauLibs::LIB_BIT32;
-    }
-}
