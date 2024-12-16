@@ -1,16 +1,52 @@
 use std::{
     cell::UnsafeCell,
-    ffi::{c_char, c_int},
+    ffi::{c_char, c_int, CStr, CString},
 };
 
-use crate::{cstdlib_free, luau_compile, LuauCompileOptions};
+use crate::{
+    cstdlib_free, luau_compile, LuauCompileOptions, LuauLibraryMemberConstantCallback,
+    LuauLibraryMemberTypeCallback,
+};
+
+#[derive(Debug, Clone)]
+pub struct CompilerLibraries {
+    libraries: Vec<CString>,
+    member_type_callback: LuauLibraryMemberTypeCallback,
+    member_constant_callback: LuauLibraryMemberConstantCallback,
+}
+
+impl CompilerLibraries {
+    pub fn new<T: AsRef<[u8]>>(
+        libraries: impl AsRef<[T]>,
+        member_type_callback: LuauLibraryMemberTypeCallback,
+        member_constant_callback: LuauLibraryMemberConstantCallback,
+    ) -> Self {
+        let libraries = libraries.as_ref();
+        let mut cstring_vec = Vec::with_capacity(libraries.len());
+
+        for v in libraries {
+            cstring_vec.push(
+                CString::new(v.as_ref()).expect("Library names should not contain null bytes"),
+            );
+        }
+
+        Self {
+            libraries: cstring_vec,
+            member_type_callback,
+            member_constant_callback,
+        }
+    }
+}
 
 pub struct Compiler {
-    _vector_lib: Option<Box<[u8]>>,
-    _vector_ctor: Option<Box<[u8]>>,
-    _vector_type: Option<Box<[u8]>>,
-    _mutable_globals: Option<Vec<Box<[u8]>>>,
-    _userdata_types: Option<Vec<Box<[u8]>>>,
+    _vector_lib: Option<CString>,
+    _vector_ctor: Option<CString>,
+    _vector_type: Option<CString>,
+    _mutable_globals: Option<Vec<CString>>,
+    _userdata_types: Option<Vec<CString>>,
+    _libraries_with_known_members: Option<Vec<CString>>,
+    _disabled_builtins: Option<Vec<CString>>,
+    _libs: Option<CompilerLibraries>,
     options: UnsafeCell<LuauCompileOptions>,
 }
 
@@ -22,41 +58,45 @@ impl Compiler {
             _vector_type: None,
             _mutable_globals: None,
             _userdata_types: None,
+            _libraries_with_known_members: None,
+            _disabled_builtins: None,
+            _libs: None,
             options: UnsafeCell::new(LuauCompileOptions::default()),
         }
     }
 
     /// Sets the optimization level for the compiler
-    pub fn optimization_level(&mut self, level: c_int) -> &mut Self {
+    pub fn set_optimization_level(&mut self, level: c_int) -> &mut Self {
         self.options.get_mut().optimization_level = level;
 
         self
     }
 
     /// Sets the debug level for the compiler
-    pub fn debug_level(&mut self, level: c_int) -> &mut Self {
+    pub fn set_debug_level(&mut self, level: c_int) -> &mut Self {
         self.options.get_mut().debug_level = level;
 
         self
     }
 
     /// Sets the type info level for the compiler
-    pub fn type_info_level(&mut self, level: c_int) -> &mut Self {
+    pub fn set_type_info_level(&mut self, level: c_int) -> &mut Self {
         self.options.get_mut().type_info_level = level;
 
         self
     }
 
     /// Sets the coverage level for the compiler
-    pub fn coverage_level(&mut self, level: c_int) -> &mut Self {
+    pub fn set_coverage_level(&mut self, level: c_int) -> &mut Self {
         self.options.get_mut().coverage_level = level;
 
         self
     }
 
     /// Sets the vector library ident for the compiler
-    pub fn vector_lib(&mut self, lib: impl AsRef<[u8]>) -> &mut Self {
-        let lib: Box<[u8]> = Box::from(lib.as_ref());
+    pub fn set_vector_lib(&mut self, lib: impl AsRef<[u8]>) -> &mut Self {
+        let lib =
+            CString::new(lib.as_ref()).expect("Compiler arguments may not contain a null byte");
 
         self.options.get_mut().vector_lib = lib.as_ptr() as _;
         self._vector_lib = Some(lib);
@@ -65,8 +105,9 @@ impl Compiler {
     }
 
     /// Sets the vector constructor ident for the compiler
-    pub fn vector_ctor(&mut self, ctor: impl AsRef<[u8]>) -> &mut Self {
-        let ctor: Box<[u8]> = Box::from(ctor.as_ref());
+    pub fn set_vector_ctor(&mut self, ctor: impl AsRef<[u8]>) -> &mut Self {
+        let ctor =
+            CString::new(ctor.as_ref()).expect("Compiler arguments may not contain a null byte");
 
         self.options.get_mut().vector_ctor = ctor.as_ptr() as _;
         self._vector_ctor = Some(ctor);
@@ -75,8 +116,9 @@ impl Compiler {
     }
 
     /// Sets the vector type ident for the compiler
-    pub fn vector_type(&mut self, vec_type: impl AsRef<[u8]>) -> &mut Self {
-        let vector_type: Box<[u8]> = Box::from(vec_type.as_ref());
+    pub fn set_vector_type(&mut self, vec_type: impl AsRef<[u8]>) -> &mut Self {
+        let vector_type = CString::new(vec_type.as_ref())
+            .expect("Compiler arguments may not contain a null byte");
 
         self.options.get_mut().vector_type = vector_type.as_ptr() as _;
         self._vector_type = Some(vector_type);
@@ -85,39 +127,54 @@ impl Compiler {
     }
 
     /// Sets the mutable globals for the compiler
-    pub fn mutable_globals<T: AsRef<[u8]>>(&mut self, lib: impl AsRef<[T]>) -> &mut Self {
-        let mut vector: Vec<Box<[u8]>> = Vec::new();
-        let mut pointer_vectors: Vec<*const u8> = Vec::new();
+    pub fn set_mutable_globals<T: AsRef<[u8]>>(&mut self, lib: impl AsRef<[T]>) -> &mut Self {
+        let mut vector = Vec::new();
+        let mut pointer_vectors = Vec::new();
 
         for t in lib.as_ref() {
-            let boxed: Box<[u8]> = Box::from(t.as_ref());
-            pointer_vectors.push(boxed.as_ptr());
-            vector.push(boxed);
+            let string =
+                CString::new(t.as_ref()).expect("Compiler arguments may not contain a null byte");
+            pointer_vectors.push(string.as_ptr());
+            vector.push(string);
         }
 
-        self.options.get_mut().mutable_globals = pointer_vectors.as_ptr() as *const *const _;
+        self.options.get_mut().mutable_globals = pointer_vectors.as_ptr();
         self._mutable_globals = Some(vector);
 
         self
     }
 
     /// Sets the userdata types for the compiler
-    pub fn userdata_types<T: AsRef<[u8]>>(&mut self, types: impl AsRef<[T]>) -> &mut Self {
-        let mut vector: Vec<Box<[u8]>> = Vec::new();
-        let mut pointer_vectors: Vec<*const u8> = Vec::new();
+    pub fn set_userdata_types<T: AsRef<CStr>>(&mut self, types: impl AsRef<[T]>) -> &mut Self {
+        let mut vector: Vec<CString> = Vec::new();
+        let mut pointer_vectors: Vec<*const c_char> = Vec::new();
 
         for t in types.as_ref() {
-            let boxed: Box<[u8]> = Box::from(t.as_ref());
+            let boxed = CString::from(t.as_ref());
             pointer_vectors.push(boxed.as_ptr());
             vector.push(boxed);
         }
 
-        self.options.get_mut().userdata_types = pointer_vectors.as_ptr() as *const *const _;
+        self.options.get_mut().userdata_types = pointer_vectors.as_ptr();
         self._userdata_types = Some(vector);
 
         self
     }
 
+    pub fn set_libraries(&mut self, libraries: CompilerLibraries) -> &mut Self {
+        let mut pointer_vec = Vec::with_capacity(libraries.libraries.len());
+
+        for v in &libraries.libraries {
+            pointer_vec.push(v.as_ptr());
+        }
+
+        self._libs = Some(libraries);
+        self.options.get_mut().libraries_with_known_members = pointer_vec.as_ptr();
+
+        self
+    }
+    
+    #[must_use]
     pub fn compile(&self, source: impl AsRef<[u8]>) -> CompilerResult {
         let source = source.as_ref();
         unsafe {
@@ -141,26 +198,43 @@ impl Clone for Compiler {
         // not aliasing a mutable reference
         let original_options = unsafe { self.options.get().as_ref() }.unwrap();
 
-        options.optimization_level(original_options.optimization_level);
-        options.debug_level(original_options.debug_level);
-        options.type_info_level(original_options.type_info_level);
-        options.coverage_level(original_options.coverage_level);
+        options.set_optimization_level(original_options.optimization_level);
+        options.set_debug_level(original_options.debug_level);
+        options.set_type_info_level(original_options.type_info_level);
+        options.set_coverage_level(original_options.coverage_level);
 
         if let Some(vector_lib) = &self._vector_lib {
-            options.vector_lib(vector_lib);
+            options.set_vector_lib(vector_lib.as_bytes());
         }
         if let Some(vector_ctor) = &self._vector_ctor {
-            options.vector_ctor(vector_ctor);
+            options.set_vector_ctor(vector_ctor.as_bytes());
         }
         if let Some(vector_type) = &self._vector_type {
-            options.vector_type(vector_type);
+            options.set_vector_type(vector_type.as_bytes());
         }
         if let Some(mutable_globals) = &self._mutable_globals {
-            options.mutable_globals(mutable_globals);
+            let cstring_vec = mutable_globals.clone();
+            let pointer_vec = Vec::with_capacity(cstring_vec.len());
+            options._mutable_globals = Some(cstring_vec);
+            options.options.get_mut().mutable_globals = pointer_vec.as_ptr();
         }
 
         if let Some(userdata_types) = &self._userdata_types {
-            options.userdata_types(userdata_types);
+            let cstring_vec = userdata_types.clone();
+            let pointer_vec = Vec::with_capacity(cstring_vec.len());
+            options._userdata_types = Some(cstring_vec);
+            options.options.get_mut().userdata_types = pointer_vec.as_ptr();
+        }
+
+        if let Some(disabled_builtins) = &self._disabled_builtins {
+            let cstring_vec = disabled_builtins.clone();
+            let pointer_vec = Vec::with_capacity(cstring_vec.len());
+            options._disabled_builtins = Some(cstring_vec);
+            options.options.get_mut().disabled_builtins = pointer_vec.as_ptr();
+        }
+
+        if let Some(libs) = self._libs.clone() {
+            options.set_libraries(libs);
         }
 
         options
@@ -229,16 +303,37 @@ impl Drop for CompilerResult {
 
 #[cfg(test)]
 mod tests {
-    use crate::Luau;
+    use std::ffi::c_char;
 
-    use super::Compiler;
+    use crate::{Luau, LuauBytecodeType, LuauCompilerConstant};
+
+    use super::{Compiler, CompilerLibraries};
+
+
+    unsafe extern "C-unwind" fn member_type_callback(
+        _: *const c_char,
+        _: *const c_char,
+    ) -> LuauBytecodeType {
+        LuauBytecodeType::LBC_TYPE_BOOLEAN
+    }
+
+    unsafe extern "C-unwind" fn member_constant_callback(
+        _: *const c_char,
+        _: *const c_char,
+        _: LuauCompilerConstant,
+    ) {
+    }
 
     #[test]
     fn compiler_success() {
-        let compiler = Compiler::new();
+        let mut compiler = Compiler::new();
 
         // has an effect so cant be optimized out entirely
-        let result = compiler.compile("v()");
+        let result = compiler
+            .set_optimization_level(2)
+            .set_coverage_level(1)
+            .set_mutable_globals(["a"])
+            .compile("v()");
 
         assert!(result.is_ok(), "Expected result to be a success");
         assert!(
@@ -258,11 +353,32 @@ mod tests {
     }
 
     #[test]
+    fn libs() {
+        let mut compiler = Compiler::new();
+
+        compiler.set_libraries(CompilerLibraries::new(
+            ["test"],
+            member_type_callback,
+            member_constant_callback,
+        ));
+
+        let compiler_result = compiler.compile("local a = test.test");
+
+        assert!(compiler_result.is_ok(), "Expected compiler to succeed");
+    }
+
+    #[test]
     fn cloned_compiler() {
-        let compiler = {
+        let mut compiler = {
             let original_compiler = Compiler::new();
             original_compiler.clone()
         };
+
+        compiler.set_libraries(CompilerLibraries::new(
+            ["test"],
+            member_type_callback,
+            member_constant_callback,
+        ));
 
         // has an effect so cant be optimized out entirely
         let result = compiler.compile("v()");
@@ -277,7 +393,7 @@ mod tests {
             "Expected resultant bytecode to be non-empty"
         );
     }
-    
+
     #[test]
     fn compiler_error() {
         let compiler = Compiler::new();
