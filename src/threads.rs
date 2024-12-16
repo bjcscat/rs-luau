@@ -23,6 +23,8 @@ impl Display for MainStateDeadError {
 }
 
 impl LuauThread<'_> {
+    /// # Safety
+    /// Must be a state pointer created from a main state created by rs-luau, either by the push_thread function or ffi
     pub unsafe fn from_ptr(state: *mut _LuaState, root_check: Rc<Cell<bool>>) -> Self {
         let boxed_luau = Box::new(Luau::from_ptr(state));
         

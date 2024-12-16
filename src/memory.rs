@@ -12,7 +12,7 @@ pub trait LuauAllocator {
     fn deallocate(&self, ptr: *mut c_void, old_size: usize);
 }
 
-const PLATFORM_ALIGNMENT: usize = core::mem::align_of::<core::ffi::c_ulonglong>();
+const PLATFORM_ALIGNMENT: usize = std::mem::align_of::<std::ffi::c_ulonglong>();
 
 pub struct DefaultLuauAllocator {}
 

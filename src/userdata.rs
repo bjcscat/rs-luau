@@ -4,7 +4,7 @@ use std::{
     error::Error,
     fmt::{Debug, Display},
     ops::{Deref, DerefMut},
-    os::raw::c_void,
+    ffi::c_void,
     ptr::drop_in_place,
 };
 

@@ -1,4 +1,4 @@
-#![allow(dead_code, unused)]
+#![allow(dead_code, unused, clippy::missing_safety_doc)]
 
 use std::ffi::c_int;
 
