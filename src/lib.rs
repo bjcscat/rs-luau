@@ -26,7 +26,6 @@ use ffi::{
     prelude::*,
 };
 use memory::{luau_alloc_cb, DefaultLuauAllocator};
-use threads::LuauThread;
 use userdata::{
     drop_userdata, dtor_rs_luau_userdata_callback, Userdata, UserdataBorrowError, UserdataRef,
     UserdataRefMut, UD_TAG,
@@ -35,6 +34,7 @@ use userdata::{
 pub use ffi::prelude::LuauStatus;
 pub use libs::LuauLibs;
 pub use memory::LuauAllocator;
+pub use threads::LuauThread;
 
 macro_rules! luau_stack_precondition {
     ($cond:expr) => {
@@ -264,7 +264,7 @@ impl Luau {
         luau_stack_precondition!(self.check_index(-1));
 
         // SAFETY: a value on the top of the stack exists as verified by the precondition
-        unsafe {lua_error(self.state)}
+        unsafe { lua_error(self.state) }
     }
 
     /// Returns the type of a luau value at `idx`
@@ -985,10 +985,8 @@ impl Luau {
     }
 
     /// Returns the thread local userdata
-    pub fn get_thread_data<T: Any>(&self) -> Option<&T> {        
-        let boxed = unsafe {
-            (lua_getthreaddata(self.state) as *const Box<dyn Any>).as_ref()?
-        };
+    pub fn get_thread_data<T: Any>(&self) -> Option<&T> {
+        let boxed = unsafe { (lua_getthreaddata(self.state) as *const Box<dyn Any>).as_ref()? };
 
         boxed.downcast_ref()
     }
@@ -1266,12 +1264,10 @@ impl Drop for Luau {
 
 #[macro_export]
 macro_rules! try_luau {
-    ($state:ident, $block:block) => {
-        {
-            $state.push_function(|$state| $block, Some("_try_lua"), 0);
-            $state.call(0, 0)
-        }
-    };
+    ($state:ident, $block:block) => {{
+        $state.push_function(|$state| $block, Some("_try_lua"), 0);
+        $state.call(0, 0)
+    }};
 }
 
 #[cfg(test)]
@@ -1300,7 +1296,10 @@ mod tests {
             luau.error()
         });
 
-        assert!(matches!(status, LuauStatus::LUA_ERRRUN), "Expected a runtime error");
+        assert!(
+            matches!(status, LuauStatus::LUA_ERRRUN),
+            "Expected a runtime error"
+        );
         assert!(luau.to_boolean(-1), "Expected the boolean to be true");
     }
 
@@ -1379,7 +1378,6 @@ mod tests {
 
         assert_eq!(luau.type_of(-1), LuauType::LUA_TFUNCTION);
     }
-
 
     #[test]
     fn tables() {
