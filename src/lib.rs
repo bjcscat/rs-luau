@@ -259,6 +259,14 @@ impl Luau {
         unsafe { lua_break(self.state) }
     }
 
+    /// Produces an error with the value on the top of the stack
+    pub fn error(&self) -> c_int {
+        luau_stack_precondition!(self.check_index(-1));
+
+        // SAFETY: a value on the top of the stack exists as verified by the precondition
+        unsafe {lua_error(self.state)}
+    }
+
     /// Returns the type of a luau value at `idx`
     pub fn type_of(&self, idx: c_int) -> LuauType {
         luau_stack_precondition!(self.check_index(idx));
@@ -1256,6 +1264,16 @@ impl Drop for Luau {
     }
 }
 
+#[macro_export]
+macro_rules! try_luau {
+    ($state:ident, $block:block) => {
+        {
+            $state.push_function(|$state| $block, Some("_try_lua"), 0);
+            $state.call(0, 0)
+        }
+    };
+}
+
 #[cfg(test)]
 #[allow(non_snake_case)]
 mod tests {
@@ -1272,6 +1290,19 @@ mod tests {
         userdata::{UserdataBorrowError, UserdataRef},
         LuauLibs, LuauStatus, LuauType,
     };
+
+    #[test]
+    fn try_test() {
+        let luau = Luau::default();
+
+        let status = try_luau!(luau, {
+            luau.push_boolean(true);
+            luau.error()
+        });
+
+        assert!(matches!(status, LuauStatus::LUA_ERRRUN), "Expected a runtime error");
+        assert!(luau.to_boolean(-1), "Expected the boolean to be true");
+    }
 
     #[test]
     #[should_panic]
@@ -1348,6 +1379,7 @@ mod tests {
 
         assert_eq!(luau.type_of(-1), LuauType::LUA_TFUNCTION);
     }
+
 
     #[test]
     fn tables() {
@@ -1558,25 +1590,6 @@ mod tests {
         })
         .is_err());
     }
-
-    // #[test]
-    // fn try_safety() {
-    // let luau = Luau::default();
-
-    // let mut did_error = false;
-
-    // luau.lua_try_catch(
-    //     |state, _| state.error(LuauError::RuntimeError("error!")),
-    //     |_, did_error| {
-    //         *did_error = true;
-    //     },
-    //     &mut did_error,
-    // );
-
-    // assert!(did_error, "Expected error callback to be invoked.")
-
-    // todo!();
-    // }
 
     #[test]
     fn function_check() {
