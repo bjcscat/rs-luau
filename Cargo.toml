@@ -1,7 +1,10 @@
 [package]
 name = "rs-luau"
+description = "Minimal overhead Luau bindings for Rust!"
 version = "0.0.1"
 edition = "2021"
+repository = "https://github.com/bjcscat/rs-luau"
+license = "MPL-2.0"
 
 [features]
 default = ["compiler", "codegen"]
