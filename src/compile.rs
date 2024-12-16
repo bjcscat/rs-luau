@@ -1,5 +1,5 @@
 use core::str;
-use std::{cell::UnsafeCell, ffi::c_int};
+use std::{cell::UnsafeCell, ffi::{c_char, c_int}};
 
 use crate::{cstdlib_free, luau_compile, LuauCompileOptions};
 
@@ -143,7 +143,7 @@ impl Default for Compiler {
 }
 
 pub struct CompilerResult {
-    bytecode: *const i8,
+    bytecode: *const c_char,
     len: usize,
 }
 
