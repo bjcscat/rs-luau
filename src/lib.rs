@@ -310,6 +310,10 @@ impl Luau {
             return true;
         }
 
+        if idx == 0 {
+            return false;
+        }
+
         let top = self.top();
 
         let idx = if idx < 0 {
@@ -323,6 +327,8 @@ impl Luau {
             // upvalue idx
             return true;
         }
+
+        // zero is acceptable here
 
         idx >= 0 && // greater or equal to zero and
         idx <= top && // lesser than or equal to the top and
@@ -1151,7 +1157,8 @@ impl Luau {
 
     /// Loads bytecode into the VM and pushes a function to the stack
     pub fn load(&self, chunk_name: Option<&CStr>, bytecode: &[u8], env: c_int) -> Result<(), &str> {
-        luau_stack_precondition!(self.check_index(env));
+        // specifically allow env 0
+        luau_stack_precondition!(env == 0 || self.check_index(env));
         luau_stack_precondition!(self.check_stack(2));
 
         let success = unsafe {
@@ -1167,6 +1174,7 @@ impl Luau {
         if success == 0 {
             Ok(())
         } else {
+            dbg!(self.top());
             // we have an error and know its ascii
             Err(self.to_str(-1).unwrap().unwrap())
         }
@@ -1308,7 +1316,6 @@ mod tests {
 
         luau.is_number(-1);
         luau.is_number(1);
-        luau.is_number(0); // not the value but is the nil value
     }
 
     #[cfg(all(feature = "codegen", feature = "compiler"))]
@@ -1551,8 +1558,9 @@ mod tests {
     }
 
     #[test]
+    #[should_panic]
     fn luau_panic_unwind() {
-        struct PanicAllocator {}
+        struct PanicAllocator;
 
         impl LuauAllocator for PanicAllocator {
             fn allocate(&self, _: usize) -> *mut std::ffi::c_void {
@@ -1568,10 +1576,9 @@ mod tests {
             }
         }
 
-        assert!(std::panic::catch_unwind(|| {
+        {
             black_box(Luau::new(PanicAllocator {}));
-        })
-        .is_err());
+        };
     }
 
     #[test]
