@@ -42,20 +42,21 @@ pub type LuauLibraryMemberConstantCallback = unsafe extern "C-unwind" fn(
 );
 
 #[repr(C)]
+#[allow(non_snake_case)]
 pub struct LuauCompileOptions {
     /// Determines the degree of optimizations the compiler will do
     ///
     /// 0. No optimizations
     /// 1. Optimizations which will not impact debuggability
     /// 2. All optimizations in level 1 plus optimizations that harm debuggability such as inlining
-    pub optimization_level: c_int,
+    pub optimizationLevel: c_int,
 
     /// Determiens the degree to which debugging information will be included
     ///
     /// 0. No debug information
     /// 1. Line info & function names only; sufficient for backtraces
     /// 2. Full debug info with local & upvalue names; necessary for debugger
-    pub debug_level: c_int,
+    pub debugLevel: c_int,
 
     /// Type information is used to guide native code generation decisions
     ///
@@ -63,52 +64,52 @@ pub struct LuauCompileOptions {
     ///
     /// 0. generate for native modules
     /// 1. generate for all modules
-    pub type_info_level: c_int,
+    pub typeInfoLevel: c_int,
 
     /// Determines the degree to which converage information should be included into the bytecode
-    pub coverage_level: c_int,
+    pub coverageLevel: c_int,
 
     /// Global library to construct vectors; disabled by default
-    pub vector_lib: *const c_char,
+    pub vectorLib: *const c_char,
 
     /// Global builtin to construct vectors; disabled by default
-    pub vector_ctor: *const c_char,
+    pub vectorCtor: *const c_char,
 
     /// Vector typename for type tables; disabled by default
-    pub vector_type: *const c_char,
+    pub vectorType: *const c_char,
 
     /// `NULL`-terminated array of globals that are mutable; disables import optimizations for fields accessed through these
-    pub mutable_globals: *const *const c_char,
+    pub mutableGlobals: *const *const c_char,
 
     /// `NULL`-terminated array of userdata types which will be included in the type information
-    pub userdata_types: *const *const c_char,
+    pub userdataTypes: *const *const c_char,
 
     /// null-terminated array of globals which act as libraries and have members with known type and/or constant value
     /// when an import of one of these libraries is accessed, library_member_type_callback and library_member_constant_callback below will be called to receive that information
-    pub libraries_with_known_members: *const *const c_char,
-    pub library_member_type_callback: Option<LuauLibraryMemberTypeCallback>,
-    pub library_member_constant_callback: Option<LuauLibraryMemberConstantCallback>,
+    pub librariesWithKnownMembers: *const *const c_char,
+    pub libraryMemberTypeCallback: Option<LuauLibraryMemberTypeCallback>,
+    pub libraryMemberConstantCallback: Option<LuauLibraryMemberConstantCallback>,
 
     /// `NULL`-terminated array of builtins which will not be compiled into a fastcall ("name", "lib.name")
-    pub disabled_builtins: *const *const c_char,
+    pub disabledBuiltins: *const *const c_char,
 }
 
 impl Default for LuauCompileOptions {
     fn default() -> Self {
         Self {
-            optimization_level: 1,
-            debug_level: 1,
-            type_info_level: 0,
-            coverage_level: 0,
-            vector_lib: ptr::null(),
-            vector_ctor: ptr::null(),
-            vector_type: ptr::null(),
-            mutable_globals: ptr::null(),
-            userdata_types: ptr::null(),
-            libraries_with_known_members: null(),
-            library_member_type_callback: None,
-            library_member_constant_callback: None,
-            disabled_builtins: null(),
+            optimizationLevel: 1,
+            debugLevel: 1,
+            typeInfoLevel: 0,
+            coverageLevel: 0,
+            vectorLib: ptr::null(),
+            vectorCtor: ptr::null(),
+            vectorType: ptr::null(),
+            mutableGlobals: ptr::null(),
+            userdataTypes: ptr::null(),
+            librariesWithKnownMembers: null(),
+            libraryMemberTypeCallback: None,
+            libraryMemberConstantCallback: None,
+            disabledBuiltins: null(),
         }
     }
 }
