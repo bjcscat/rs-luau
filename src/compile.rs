@@ -1,6 +1,6 @@
 use std::{
-    cell::UnsafeCell,
-    ffi::{c_char, c_int, CStr, CString},
+    ffi::{c_char, c_int, CString},
+    ptr::null,
 };
 
 use crate::{
@@ -10,154 +10,139 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub struct CompilerLibraries {
-    libraries: Vec<CString>,
+    libraries: Vec<String>,
     member_type_callback: LuauLibraryMemberTypeCallback,
     member_constant_callback: LuauLibraryMemberConstantCallback,
 }
 
 impl CompilerLibraries {
-    pub fn new<T: AsRef<[u8]>>(
-        libraries: impl AsRef<[T]>,
+    pub fn new(
+        libraries: Vec<String>,
         member_type_callback: LuauLibraryMemberTypeCallback,
         member_constant_callback: LuauLibraryMemberConstantCallback,
     ) -> Self {
-        let libraries = libraries.as_ref();
-        let mut cstring_vec = Vec::with_capacity(libraries.len());
-
-        for v in libraries {
-            cstring_vec.push(
-                CString::new(v.as_ref()).expect("Library names should not contain null bytes"),
-            );
-        }
-
         Self {
-            libraries: cstring_vec,
+            libraries,
             member_type_callback,
             member_constant_callback,
         }
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct Compiler {
-    _vector_lib: Option<CString>,
-    _vector_ctor: Option<CString>,
-    _vector_type: Option<CString>,
-    _mutable_globals: Option<Vec<CString>>,
-    _userdata_types: Option<Vec<CString>>,
-    _libraries_with_known_members: Option<Vec<CString>>,
-    _disabled_builtins: Option<Vec<CString>>,
-    _libs: Option<CompilerLibraries>,
-    options: UnsafeCell<LuauCompileOptions>,
+    optimization_level: u8,
+    debug_level: u8,
+    type_info_level: u8,
+    coverage_level: u8,
+    vector_lib: Option<String>,
+    vector_ctor: Option<String>,
+    vector_type: Option<String>,
+    mutable_globals: Vec<String>,
+    userdata_types: Vec<String>,
+    disabled_builtins: Vec<String>,
+    libs: Option<CompilerLibraries>,
 }
 
 impl Compiler {
     pub fn new() -> Self {
         Self {
-            _vector_lib: None,
-            _vector_ctor: None,
-            _vector_type: None,
-            _mutable_globals: None,
-            _userdata_types: None,
-            _libraries_with_known_members: None,
-            _disabled_builtins: None,
-            _libs: None,
-            options: UnsafeCell::new(LuauCompileOptions::default()),
+            optimization_level: 1,
+            debug_level: 1,
+            type_info_level: 0,
+            coverage_level: 0,
+            vector_lib: None,
+            vector_ctor: None,
+            vector_type: None,
+            mutable_globals: Vec::new(),
+            userdata_types: Vec::new(),
+            disabled_builtins: Vec::new(),
+            libs: None,
         }
     }
-
-    /// Sets the optimization level for the compiler
-    pub fn set_optimization_level(&mut self, level: c_int) -> &mut Self {
-        self.options.get_mut().optimization_level = level;
-
+    /// Sets Luau compiler optimization level.
+    ///
+    /// Possible values:
+    /// * 0 - no optimization
+    /// * 1 - baseline optimization level that doesn't prevent debuggability (default)
+    /// * 2 - includes optimizations that harm debuggability such as inlining
+    #[must_use]
+    pub const fn set_optimization_level(mut self, level: u8) -> Self {
+        self.optimization_level = level;
         self
     }
 
-    /// Sets the debug level for the compiler
-    pub fn set_debug_level(&mut self, level: c_int) -> &mut Self {
-        self.options.get_mut().debug_level = level;
-
+    /// Sets Luau compiler debug level.
+    ///
+    /// Possible values:
+    /// * 0 - no debugging support
+    /// * 1 - line info & function names only; sufficient for backtraces (default)
+    /// * 2 - full debug info with local & upvalue names; necessary for debugger
+    #[must_use]
+    pub const fn set_debug_level(mut self, level: u8) -> Self {
+        self.debug_level = level;
         self
     }
 
-    /// Sets the type info level for the compiler
-    pub fn set_type_info_level(&mut self, level: c_int) -> &mut Self {
-        self.options.get_mut().type_info_level = level;
-
+    /// Sets Luau type information level used to guide native code generation decisions.
+    ///
+    /// Possible values:
+    /// * 0 - generate for native modules (default)
+    /// * 1 - generate for all modules
+    pub const fn set_type_info_level(mut self, level: u8) -> Self {
+        self.type_info_level = level;
         self
     }
 
-    /// Sets the coverage level for the compiler
-    pub fn set_coverage_level(&mut self, level: c_int) -> &mut Self {
-        self.options.get_mut().coverage_level = level;
-
+    /// Sets Luau compiler code coverage level.
+    ///
+    /// Possible values:
+    /// * 0 - no code coverage support (default)
+    /// * 1 - statement coverage
+    /// * 2 - statement and expression coverage (verbose)
+    #[must_use]
+    pub const fn set_coverage_level(mut self, level: u8) -> Self {
+        self.coverage_level = level;
         self
     }
 
-    /// Sets the vector library ident for the compiler
-    pub fn set_vector_lib(&mut self, lib: impl AsRef<[u8]>) -> &mut Self {
-        let lib =
-            CString::new(lib.as_ref()).expect("Compiler arguments may not contain a null byte");
-
-        self.options.get_mut().vector_lib = lib.as_ptr() as _;
-        self._vector_lib = Some(lib);
-
+    #[must_use]
+    pub fn set_vector_lib(mut self, lib: impl Into<String>) -> Self {
+        self.vector_lib = Some(lib.into());
         self
     }
 
-    /// Sets the vector constructor ident for the compiler
-    pub fn set_vector_ctor(&mut self, ctor: impl AsRef<[u8]>) -> &mut Self {
-        let ctor =
-            CString::new(ctor.as_ref()).expect("Compiler arguments may not contain a null byte");
-
-        self.options.get_mut().vector_ctor = ctor.as_ptr() as _;
-        self._vector_ctor = Some(ctor);
-
+    #[must_use]
+    pub fn set_vector_ctor(mut self, ctor: impl Into<String>) -> Self {
+        self.vector_ctor = Some(ctor.into());
         self
     }
 
-    /// Sets the vector type ident for the compiler
-    pub fn set_vector_type(&mut self, vec_type: impl AsRef<[u8]>) -> &mut Self {
-        let vector_type = CString::new(vec_type.as_ref())
-            .expect("Compiler arguments may not contain a null byte");
-
-        self.options.get_mut().vector_type = vector_type.as_ptr() as _;
-        self._vector_type = Some(vector_type);
-
+    #[must_use]
+    pub fn set_vector_type(mut self, r#type: impl Into<String>) -> Self {
+        self.vector_type = Some(r#type.into());
         self
     }
 
-    /// Sets the mutable globals for the compiler
-    pub fn set_mutable_globals<T: AsRef<[u8]>>(&mut self, lib: impl AsRef<[T]>) -> &mut Self {
-        let mut vector = Vec::new();
-        let mut pointer_vectors = Vec::new();
-
-        for t in lib.as_ref() {
-            let string =
-                CString::new(t.as_ref()).expect("Compiler arguments may not contain a null byte");
-            pointer_vectors.push(string.as_ptr());
-            vector.push(string);
-        }
-
-        self.options.get_mut().mutable_globals = pointer_vectors.as_ptr();
-        self._mutable_globals = Some(vector);
-
+    /// Sets a list of globals that are mutable.
+    ///
+    /// It disables the import optimization for fields accessed through these.
+    #[must_use]
+    pub fn set_mutable_globals(mut self, globals: Vec<String>) -> Self {
+        self.mutable_globals = globals;
         self
     }
 
-    /// Sets the userdata types for the compiler
-    pub fn set_userdata_types<T: AsRef<CStr>>(&mut self, types: impl AsRef<[T]>) -> &mut Self {
-        let mut vector: Vec<CString> = Vec::new();
-        let mut pointer_vectors: Vec<*const c_char> = Vec::new();
+    /// Sets a list of userdata types that will be included in the type information.
+    #[must_use]
+    pub fn set_userdata_types(mut self, types: Vec<String>) -> Self {
+        self.userdata_types = types;
+        self
+    }
 
-        for t in types.as_ref() {
-            let boxed = CString::from(t.as_ref());
-            pointer_vectors.push(boxed.as_ptr());
-            vector.push(boxed);
-        }
-
-        self.options.get_mut().userdata_types = pointer_vectors.as_ptr();
-        self._userdata_types = Some(vector);
-
+    /// Sets a list of disabled builtin libs or functions like tonumber or math.abs
+    pub fn set_disabled_builtins(mut self, libs: Vec<String>) -> Self {
+        self.disabled_builtins = libs;
         self
     }
 
@@ -168,76 +153,90 @@ impl Compiler {
             pointer_vec.push(v.as_ptr());
         }
 
-        self._libs = Some(libraries);
-        self.options.get_mut().libraries_with_known_members = pointer_vec.as_ptr();
+        self.libs = Some(libraries);
 
         self
     }
-    
+
     #[must_use]
     pub fn compile(&self, source: impl AsRef<[u8]>) -> CompilerResult {
-        let source = source.as_ref();
+        let vector_lib = self.vector_lib.clone();
+        let vector_lib = vector_lib.and_then(|lib| CString::new(lib).ok());
+        let vector_lib = vector_lib.as_ref();
+        let vector_ctor = self.vector_ctor.clone();
+        let vector_ctor = vector_ctor.and_then(|ctor| CString::new(ctor).ok());
+        let vector_ctor = vector_ctor.as_ref();
+        let vector_type = self.vector_type.clone();
+        let vector_type = vector_type.and_then(|t| CString::new(t).ok());
+        let vector_type = vector_type.as_ref();
+
+        macro_rules! vec2cstring_ptr {
+            ($name:ident, $name_ptr:ident) => {
+                let $name = self
+                    .$name
+                    .iter()
+                    .map(|name| CString::new(name.clone()).ok())
+                    .collect::<Option<Vec<_>>>()
+                    .unwrap_or_default();
+                let mut $name = $name.iter().map(|s| s.as_ptr()).collect::<Vec<_>>();
+                let mut $name_ptr = null();
+                if !$name.is_empty() {
+                    $name.push(null());
+                    $name_ptr = $name.as_ptr();
+                }
+            };
+        }
+
+        vec2cstring_ptr!(mutable_globals, mutable_globals_ptr);
+        vec2cstring_ptr!(userdata_types, userdata_types_ptr);
+        vec2cstring_ptr!(disabled_builtins, disabled_builtins_ptr);
+
+        let known_members_vec = self.libs.clone().map(|v| {
+            v.libraries
+                .into_iter()
+                .map(|s| CString::new(s).expect("Known members should not contain null byte"))
+                .collect::<Vec<_>>()
+        });
+
+        let mut known_members_vec_pointer = known_members_vec.map_or_else(
+            || vec![null()],
+            |v| v.iter().map(|c| c.as_ptr()).collect::<Vec<_>>(),
+        );
+
+        known_members_vec_pointer.push(null());
+            
         unsafe {
-            let mut len = 0;
+            let mut options = LuauCompileOptions {
+                optimizationLevel: self.optimization_level as c_int,
+                debugLevel: self.debug_level as c_int,
+                typeInfoLevel: self.type_info_level as c_int,
+                coverageLevel: self.coverage_level as c_int,
+                vectorLib: vector_lib.map_or(null(), |s| s.as_ptr()),
+                vectorCtor: vector_ctor.map_or(null(), |s| s.as_ptr()),
+                vectorType: vector_type.map_or(null(), |s| s.as_ptr()),
+                mutableGlobals: mutable_globals_ptr,
+                userdataTypes: userdata_types_ptr,
+                librariesWithKnownMembers: known_members_vec_pointer.as_ptr(),
+                libraryMemberTypeCallback: self.libs.clone().map(|v| v.member_type_callback),
+                libraryMemberConstantCallback: self
+                    .libs
+                    .clone()
+                    .map(|v| v.member_constant_callback),
+                disabledBuiltins: disabled_builtins_ptr,
+            };
+
+            let source = source.as_ref();
+            let mut len: usize = 0;
+
             let bytecode = luau_compile(
                 source.as_ptr() as _,
                 source.len(),
-                self.options.get(),
+                &raw mut options,
                 &raw mut len,
             );
 
             CompilerResult { bytecode, len }
         }
-    }
-}
-
-impl Clone for Compiler {
-    fn clone(&self) -> Self {
-        let mut options = Self::new();
-
-        // not aliasing a mutable reference
-        let original_options = unsafe { self.options.get().as_ref() }.unwrap();
-
-        options.set_optimization_level(original_options.optimization_level);
-        options.set_debug_level(original_options.debug_level);
-        options.set_type_info_level(original_options.type_info_level);
-        options.set_coverage_level(original_options.coverage_level);
-
-        if let Some(vector_lib) = &self._vector_lib {
-            options.set_vector_lib(vector_lib.as_bytes());
-        }
-        if let Some(vector_ctor) = &self._vector_ctor {
-            options.set_vector_ctor(vector_ctor.as_bytes());
-        }
-        if let Some(vector_type) = &self._vector_type {
-            options.set_vector_type(vector_type.as_bytes());
-        }
-        if let Some(mutable_globals) = &self._mutable_globals {
-            let cstring_vec = mutable_globals.clone();
-            let pointer_vec = Vec::with_capacity(cstring_vec.len());
-            options._mutable_globals = Some(cstring_vec);
-            options.options.get_mut().mutable_globals = pointer_vec.as_ptr();
-        }
-
-        if let Some(userdata_types) = &self._userdata_types {
-            let cstring_vec = userdata_types.clone();
-            let pointer_vec = Vec::with_capacity(cstring_vec.len());
-            options._userdata_types = Some(cstring_vec);
-            options.options.get_mut().userdata_types = pointer_vec.as_ptr();
-        }
-
-        if let Some(disabled_builtins) = &self._disabled_builtins {
-            let cstring_vec = disabled_builtins.clone();
-            let pointer_vec = Vec::with_capacity(cstring_vec.len());
-            options._disabled_builtins = Some(cstring_vec);
-            options.options.get_mut().disabled_builtins = pointer_vec.as_ptr();
-        }
-
-        if let Some(libs) = self._libs.clone() {
-            options.set_libraries(libs);
-        }
-
-        options
     }
 }
 
@@ -309,7 +308,6 @@ mod tests {
 
     use super::{Compiler, CompilerLibraries};
 
-
     unsafe extern "C-unwind" fn member_type_callback(
         _: *const c_char,
         _: *const c_char,
@@ -332,7 +330,7 @@ mod tests {
         let result = compiler
             .set_optimization_level(2)
             .set_coverage_level(1)
-            .set_mutable_globals(["a"])
+            .set_mutable_globals(vec!["a".to_string()])
             .compile("v()");
 
         assert!(result.is_ok(), "Expected result to be a success");
@@ -357,7 +355,7 @@ mod tests {
         let mut compiler = Compiler::new();
 
         compiler.set_libraries(CompilerLibraries::new(
-            ["test"],
+            vec!["test".to_string()],
             member_type_callback,
             member_constant_callback,
         ));
@@ -375,7 +373,7 @@ mod tests {
         };
 
         compiler.set_libraries(CompilerLibraries::new(
-            ["test"],
+            vec!["test".to_string()],
             member_type_callback,
             member_constant_callback,
         ));
